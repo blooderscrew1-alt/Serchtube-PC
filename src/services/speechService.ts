@@ -800,7 +800,11 @@ export class SpeechService {
    * Motor por defecto: voces neuronales ultra-realistas de Microsoft (gratuitas),
    * con fallback automático a las voces del navegador (speechSynthesis).
    */
-  public async speak(text: string): Promise<void> {
+  /**
+   * @param engineOverride Si se indica, habla SOLO con ese motor (sin cadena de
+   * prioridad ni fallbacks). Útil para el botón "Probar" de cada puesto en Ajustes.
+   */
+  public async speak(text: string, engineOverride?: 'elevenlabs' | 'gemini' | 'edge'): Promise<void> {
     if (!text) return;
 
     // Sanitizar texto para que NUNCA mencione la palabra clave (ej: "música")
@@ -824,7 +828,9 @@ export class SpeechService {
 
     // Cadena de motores según el orden de prioridad configurado en Ajustes.
     // Cada motor se intenta en orden; el primero que genere audio habla.
-    let chain = (this.config.voicePriority || []).filter(e => e === 'elevenlabs' || e === 'gemini' || e === 'edge');
+    let chain = engineOverride
+      ? [engineOverride]
+      : (this.config.voicePriority || []).filter(e => e === 'elevenlabs' || e === 'gemini' || e === 'edge');
     if (chain.length === 0) {
       // Compatibilidad con configuraciones antiguas sin orden de prioridad
       chain = this.config.ttsEngine === 'browser'
@@ -864,7 +870,8 @@ export class SpeechService {
     }
 
     // Última línea de defensa: navegador si la cadena completa falló
-    if (mySeq === this.ttsSeq && !chain.includes('edge')) {
+    // (salvo en pruebas de un motor concreto, para oír exactamente ese motor)
+    if (mySeq === this.ttsSeq && !chain.includes('edge') && !engineOverride) {
       return this.speakWithBrowser(sanitized, finalRate, finalPitch);
     }
   }

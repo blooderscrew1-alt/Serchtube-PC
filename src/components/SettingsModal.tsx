@@ -1619,6 +1619,27 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                               <option key={id} value={id}>{label}</option>
                             ))}
                           </select>
+                          {current !== 'none' && (
+                            <button
+                              type="button"
+                              title={`Probar solo este motor (${ENGINE_LABELS[current]})`}
+                              onClick={() => {
+                                setTestingVoice('neural');
+                                const speechService = SpeechService.getInstance();
+                                speechService.updateConfig(speechConfig);
+                                speechService.speak("Hola, así suena este motor de voz.", current as any);
+                                setTimeout(() => setTestingVoice(null), 8000);
+                              }}
+                              className={`flex items-center gap-1 px-2 py-1.5 rounded-lg text-[10px] font-bold transition-all flex-shrink-0 cursor-pointer ${
+                                testingVoice === 'neural'
+                                  ? 'bg-violet-600 text-white animate-pulse'
+                                  : 'bg-violet-600/25 hover:bg-violet-600/50 text-violet-100 border border-violet-500/40'
+                              }`}
+                            >
+                              <Volume2 size={11} />
+                              <span>Probar</span>
+                            </button>
+                          )}
                         </div>
 
                         {/* Voz específica del motor elegido en este puesto */}
