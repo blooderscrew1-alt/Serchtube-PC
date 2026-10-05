@@ -452,6 +452,7 @@ export default function App() {
       useEdgeReadAloudVoice: true,
       ttsEngine: 'neural',
       neuralVoice: 'es-MX-JorgeNeural',
+      voicePriority: ['elevenlabs', 'gemini', 'edge'],
       wakeWordEnabled: false,
       wakeWord: 'música',
       satelliteMicOnly: false

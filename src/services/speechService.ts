@@ -18,6 +18,12 @@ export interface SpeechConfig {
   neuralVoice?: string;
   /** Voice ID de ElevenLabs seleccionado (prioridad sobre Gemini) */
   elevenVoice?: string;
+  /**
+   * Orden de prioridad de motores de voz: el asistente intenta hablar con el
+   * primero y, si falla o no hay cuota, baja al siguiente. Ej:
+   * ['elevenlabs', 'gemini', 'edge'].
+   */
+  voicePriority?: ('elevenlabs' | 'gemini' | 'edge')[];
   speechRate: number;
   speechPitch: number;
   speechVolume?: number;
@@ -216,6 +222,7 @@ export class SpeechService {
     useEdgeReadAloudVoice: true,
     ttsEngine: 'neural',
     neuralVoice: DEFAULT_NEURAL_VOICE,
+    voicePriority: ['elevenlabs', 'gemini', 'edge'],
     wakeWordEnabled: true,
     wakeWord: 'música',
     micFocusBoost: true,
@@ -704,8 +711,10 @@ export class SpeechService {
    * (canal "Leer en voz alta" de Edge). Devuelve false si no se pudo iniciar, para
    * que el llamador haga fallback a las voces del navegador.
    */
-  private async speakWithNeural(sanitized: string, finalRate: number, finalPitch: number, callId: number): Promise<boolean> {
+  private async speakWithNeural(sanitized: string, engine: 'elevenlabs' | 'gemini', finalRate: number, finalPitch: number, callId: number): Promise<boolean> {
     if (!isNeuralTtsSupported()) return false;
+    // ElevenLabs solo si hay voz configurada (con clave guardada); si no, saltar al siguiente motor
+    if (engine === 'elevenlabs' && !this.config.elevenVoice) return false;
 
     const voice = this.config.neuralVoice && NEURAL_VOICES.some(v => v.id === this.config.neuralVoice)
       ? this.config.neuralVoice
@@ -720,12 +729,9 @@ export class SpeechService {
 
     const shouldAbort = () => callId !== this.ttsSeq;
 
-    // Si hay voz de ElevenLabs configurada, es el motor preferente (Gemini queda de respaldo en el servidor)
-    const useEleven = !!this.config.elevenVoice;
-
     let blob: Blob;
     try {
-      blob = await synthesizeNeuralSpeech(sanitized, useEleven
+      blob = await synthesizeNeuralSpeech(sanitized, engine === 'elevenlabs'
         ? { engine: 'elevenlabs', elvoice: this.config.elevenVoice, speed: finalRate, shouldAbort }
         : { engine: 'gemini', voice, style, shouldAbort }
       );
@@ -816,30 +822,51 @@ export class SpeechService {
     const finalRate = (this.config.speechRate ?? 1.0) * mult.rate;
     const finalPitch = (this.config.speechPitch ?? 1.0) * mult.pitch;
 
-    const useNeural = this.config.ttsEngine !== 'browser';
-    if (useNeural) {
-      // Estado común del ciclo de habla (anti-eco + ducking) antes de sintetizar
-      this.isSynthesizing = true;
-      this.lastSpokenText = sanitized;
-      this.lastSpokenTimestamp = Date.now();
-      this.ttsGuardUntil = Date.now() + 15000; // Mantener inmunidad mientras se sintetiza y habla
-      if (this.config.duckingEnabled) {
-        AudioEngine.getInstance().startDucking(100);
+    // Cadena de motores según el orden de prioridad configurado en Ajustes.
+    // Cada motor se intenta en orden; el primero que genere audio habla.
+    let chain = (this.config.voicePriority || []).filter(e => e === 'elevenlabs' || e === 'gemini' || e === 'edge');
+    if (chain.length === 0) {
+      // Compatibilidad con configuraciones antiguas sin orden de prioridad
+      chain = this.config.ttsEngine === 'browser'
+        ? ['edge']
+        : (this.config.elevenVoice ? ['elevenlabs', 'gemini', 'edge'] : ['gemini', 'edge']);
+    }
+
+    // Estado común del ciclo de habla (anti-eco + ducking) antes de sintetizar
+    this.isSynthesizing = true;
+    this.lastSpokenText = sanitized;
+    this.lastSpokenTimestamp = Date.now();
+    this.ttsGuardUntil = Date.now() + 15000; // Mantener inmunidad mientras se sintetiza y habla
+    if (this.config.duckingEnabled) {
+      AudioEngine.getInstance().startDucking(100);
+    }
+    this.onStatusChangeCallback?.('speaking');
+
+    try {
+      for (const engine of chain) {
+        if (mySeq !== this.ttsSeq) return; // Una orden más nueva tomó el control
+
+        if (engine === 'edge') {
+          return await this.speakWithBrowser(sanitized, finalRate, finalPitch);
+        }
+
+        const started = await this.speakWithNeural(sanitized, engine, finalRate, finalPitch, mySeq);
+        if (started) return;
       }
-      this.onStatusChangeCallback?.('speaking');
-
-      const started = await this.speakWithNeural(sanitized, finalRate, finalPitch, mySeq);
-      if (started) return;
-      if (mySeq !== this.ttsSeq) return; // Una orden más nueva tomó el control: no lanzar fallback solapado
-
-      // Fallback: restaurar ciclo y continuar con el motor del navegador
-      this.isSynthesizing = false;
-      if (this.config.duckingEnabled) {
-        AudioEngine.getInstance().stopDucking();
+    } finally {
+      // Si ningún motor de la cadena habló y no hay un intento más nuevo, restaurar ciclo
+      if (mySeq === this.ttsSeq && (this.isSynthesizing)) {
+        this.isSynthesizing = false;
+        if (this.config.duckingEnabled) {
+          AudioEngine.getInstance().stopDucking();
+        }
       }
     }
 
-    return this.speakWithBrowser(sanitized, finalRate, finalPitch);
+    // Última línea de defensa: navegador si la cadena completa falló
+    if (mySeq === this.ttsSeq && !chain.includes('edge')) {
+      return this.speakWithBrowser(sanitized, finalRate, finalPitch);
+    }
   }
 
   /** TTS clásico con las voces locales del navegador (speechSynthesis) */

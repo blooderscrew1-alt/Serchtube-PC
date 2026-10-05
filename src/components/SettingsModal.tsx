@@ -1558,14 +1558,10 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
             id="tts_voice"
             title="Voz del Asistente y Lectura Natural"
             icon={<Volume2 size={16} />}
-            summary={`Motor: ${speechConfig.ttsEngine !== 'browser' ? `Neuronal IA (${NEURAL_VOICES.find(v => v.id === (speechConfig.neuralVoice || DEFAULT_NEURAL_VOICE))?.name || 'Jorge'})` : 'Navegador'} • Velocidad: ${speechConfig.speechRate}x • Tono: ${speechConfig.speechPitch} • Volumen: ${Math.round((speechConfig.speechVolume ?? 1) * 100)}%`}
+            summary={`Prioridad: ${(speechConfig.voicePriority && speechConfig.voicePriority.length ? speechConfig.voicePriority : ['elevenlabs', 'gemini', 'edge']).map(e => e === 'elevenlabs' ? 'ElevenLabs' : e === 'gemini' ? 'Gemini' : 'Edge').join(' → ')} • Velocidad: ${speechConfig.speechRate}x • Volumen: ${Math.round((speechConfig.speechVolume ?? 1) * 100)}%`}
             badge={
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono border ${
-                speechConfig.ttsEngine !== 'browser'
-                  ? 'bg-violet-500/20 text-violet-300 border-violet-500/30'
-                  : 'bg-blue-500/20 text-blue-300 border-blue-500/30'
-              }`}>
-                {speechConfig.ttsEngine !== 'browser' ? '🧠 Neural' : 'Navegador'} • {speechConfig.speechRate}x
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-mono border bg-violet-500/20 text-violet-300 border-violet-500/30">
+                🥇{(speechConfig.voicePriority && speechConfig.voicePriority.length ? speechConfig.voicePriority : ['elevenlabs', 'gemini', 'edge'])[0]?.toUpperCase() || '—'} • {speechConfig.speechRate}x
               </span>
             }
             isExpanded={!!expandedSections['tts_voice']}
@@ -1574,95 +1570,135 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
             borderColor="border-white/10"
           >
 
-            {/* Motor de voz: Neuronal IA (recomendado) vs Navegador */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs text-gray-300 font-medium">Motor de Voz</label>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 font-mono border border-violet-500/30 font-bold">
-                  Gratis • Sin API Key
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => onUpdateSpeechConfig({ ttsEngine: 'neural' })}
-                  className={`px-3 py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer text-left ${
-                    speechConfig.ttsEngine !== 'browser'
-                      ? 'bg-violet-600/30 border-violet-500/60 text-white shadow-[0_0_12px_rgba(139,92,246,0.35)]'
-                      : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10'
-                  }`}
-                >
-                  <span className="block">🧠 Neuronal Ultra-Realista</span>
-                  <span className="block text-[10px] font-normal text-gray-400 mt-0.5">Voces de IA tipo humano (recomendado)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onUpdateSpeechConfig({ ttsEngine: 'browser' })}
-                  className={`px-3 py-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer text-left ${
-                    speechConfig.ttsEngine === 'browser'
-                      ? 'bg-blue-600/30 border-blue-500/60 text-white shadow-[0_0_12px_rgba(37,99,235,0.35)]'
-                      : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10'
-                  }`}
-                >
-                  <span className="block">🖥️ Navegador (Clásico)</span>
-                  <span className="block text-[10px] font-normal text-gray-400 mt-0.5">Voces locales del sistema</span>
-                </button>
-              </div>
-            </div>
+            {/* Orden de prioridad de voces: 1º, 2º y 3º motor con su voz */}
+            {(() => {
+              const ENGINE_LABELS: Record<string, string> = {
+                elevenlabs: '🎙️ ElevenLabs',
+                gemini: '🧠 Gemini (Google IA)',
+                edge: '🖥️ Voces Edge (navegador)'
+              };
+              const priority = speechConfig.voicePriority && speechConfig.voicePriority.length
+                ? speechConfig.voicePriority
+                : ['elevenlabs', 'gemini', 'edge'];
+              const setSlot = (slotIdx: number, value: string) => {
+                const next = [...priority];
+                if (value === 'none') {
+                  next.splice(slotIdx, 1);
+                } else {
+                  const prevIdx = next.indexOf(value as any);
+                  if (prevIdx !== -1) {
+                    // Intercambiar posiciones si ese motor ya estaba en otro puesto
+                    next[prevIdx] = next[slotIdx];
+                  }
+                  next[slotIdx] = value as any;
+                }
+                onUpdateSpeechConfig({ voicePriority: next.filter(Boolean) as any });
+              };
 
-            {/* Selector de voz neuronal */}
-            {speechConfig.ttsEngine !== 'browser' && (
-              <div className="space-y-1.5 p-3 rounded-xl bg-violet-500/[0.07] border border-violet-500/20">
-                <label className="text-xs text-gray-300 font-medium flex items-center justify-between">
-                  <span>Voz Neuronal (Español):</span>
-                  <span className="text-[10px] text-violet-300 font-mono">IA Microsoft • 24 kHz</span>
-                </label>
+              return (
+                <div className="space-y-2 p-3 rounded-xl bg-violet-500/[0.06] border border-violet-500/25">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs text-violet-200 font-semibold">Orden de prioridad de voces</label>
+                    <span className="text-[10px] text-gray-400 font-mono">1º intenta → si falla, baja al siguiente</span>
+                  </div>
 
-                <div className="flex items-center gap-2">
-                  <select
-                    value={speechConfig.neuralVoice || DEFAULT_NEURAL_VOICE}
-                    onChange={(e) => onUpdateSpeechConfig({ neuralVoice: e.target.value })}
-                    className="flex-1 bg-black/80 border border-violet-500/30 rounded-xl px-3 py-2 text-xs text-white focus:border-violet-500 focus:outline-none cursor-pointer truncate"
-                  >
-                    {NEURAL_VOICE_GROUPS.map(group => (
-                      <optgroup key={group.label} label={group.label}>
-                        {group.voices.map(v => (
-                          <option key={v.id} value={v.id}>
-                            {v.gender === 'H' ? '♂' : '♀'} {v.name} — {v.description}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
+                  {[0, 1, 2].map(slot => {
+                    const current = priority[slot] || 'none';
+                    const medal = ['🥇 1er lugar', '🥈 2do lugar', '🥉 3er lugar'][slot];
+                    return (
+                      <div key={slot} className="space-y-1.5 p-2.5 rounded-lg bg-black/40 border border-white/10">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold text-white w-24 shrink-0">{medal}</span>
+                          <select
+                            value={current}
+                            onChange={(e) => setSlot(slot, e.target.value)}
+                            className="flex-1 bg-black/80 border border-white/20 rounded-lg px-2.5 py-1.5 text-xs text-white focus:border-violet-500 focus:outline-none cursor-pointer"
+                          >
+                            {slot === 0 ? null : <option value="none">— Ninguno —</option>}
+                            {Object.entries(ENGINE_LABELS).map(([id, label]) => (
+                              <option key={id} value={id}>{label}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Voz específica del motor elegido en este puesto */}
+                        {current === 'elevenlabs' && (
+                          elevenVoices.length > 0 ? (
+                            <select
+                              value={speechConfig.elevenVoice || ''}
+                              onChange={(e) => onUpdateSpeechConfig({ elevenVoice: e.target.value || undefined })}
+                              className="w-full bg-black/80 border border-amber-500/30 rounded-lg px-2.5 py-1.5 text-xs text-amber-100 focus:border-amber-500 focus:outline-none cursor-pointer truncate"
+                            >
+                              <option value="">— Elige la voz de ElevenLabs —</option>
+                              {elevenVoices.map(v => (
+                                <option key={v.id} value={v.id}>
+                                  {v.name} {v.accent ? `(${v.accent})` : ''}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <p className="text-[10px] text-amber-300 px-1">⚠ Guarda tu clave de ElevenLabs abajo para ver sus voces.</p>
+                          )
+                        )}
+                        {current === 'gemini' && (
+                          <select
+                            value={speechConfig.neuralVoice || DEFAULT_NEURAL_VOICE}
+                            onChange={(e) => onUpdateSpeechConfig({ neuralVoice: e.target.value })}
+                            className="w-full bg-black/80 border border-violet-500/30 rounded-lg px-2.5 py-1.5 text-xs text-violet-100 focus:border-violet-500 focus:outline-none cursor-pointer truncate"
+                          >
+                            {NEURAL_VOICE_GROUPS.map(group => (
+                              <optgroup key={group.label} label={group.label}>
+                                {group.voices.map(v => (
+                                  <option key={v.id} value={v.id}>
+                                    {v.gender === 'H' ? '♂' : '♀'} {v.name} — {v.description}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ))}
+                          </select>
+                        )}
+                        {current === 'edge' && (
+                          <select
+                            value={speechConfig.voiceURI || 'auto'}
+                            onChange={(e) => onUpdateSpeechConfig({ voiceURI: e.target.value })}
+                            className="w-full bg-black/80 border border-blue-500/30 rounded-lg px-2.5 py-1.5 text-xs text-blue-100 focus:border-blue-500 focus:outline-none cursor-pointer truncate"
+                          >
+                            <option value="auto">⭐ Automático: mejor voz Natural de Edge</option>
+                            {browserVoices.filter(v => (v.lang.startsWith('es') || /spanish/i.test(v.name))).map(v => (
+                              <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    );
+                  })}
 
                   <button
                     type="button"
                     onClick={() => {
                       setTestingVoice('neural');
                       const speechService = SpeechService.getInstance();
-                      speechService.updateConfig({
-                        ...speechConfig,
-                        ttsEngine: 'neural',
-                        neuralVoice: speechConfig.neuralVoice || DEFAULT_NEURAL_VOICE
-                      });
-                      speechService.speak("Hola, esta es mi nueva voz neuronal ultra realista. Listo para reproducir tus canciones favoritas.");
+                      speechService.updateConfig({ ...speechConfig, ttsEngine: 'neural' });
+                      speechService.speak("Hola, así suena mi voz con el orden de prioridad que elegiste. Listo para reproducir tus canciones.");
                       setTimeout(() => setTestingVoice(null), 8000);
                     }}
-                    className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer ${
-                      testingVoice === 'neural'
-                        ? 'bg-violet-600 text-white animate-pulse shadow-[0_0_15px_rgba(139,92,246,0.5)]'
-                        : 'bg-violet-600/25 hover:bg-violet-600/50 text-violet-100 border border-violet-500/40'
-                    }`}
+                    className="w-full flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer bg-violet-600/25 hover:bg-violet-600/50 text-violet-100 border border-violet-500/40"
                   >
                     <Play size={12} fill="currentColor" />
-                    <span>{testingVoice === 'neural' ? 'Hablando...' : 'Probar'}</span>
+                    <span>▶ Probar cadena completa</span>
                   </button>
-                </div>
 
-                {/* ElevenLabs: voces ultra-realistas */}
+                  <p className="text-[10px] text-gray-400 leading-relaxed">
+                    El asistente intenta hablar con el <strong className="text-gray-300">1er lugar</strong>; si ese motor no tiene cuota, clave inválida o falla, baja automáticamente al <strong className="text-gray-300">2do</strong> y luego al <strong className="text-gray-300">3er</strong>. Las voces Edge son las naturales del navegador (requieren Microsoft Edge).
+                  </p>
+                </div>
+              );
+            })()}
+
+            {/* ElevenLabs: gestión de claves (las voces se eligen en el orden de prioridad) */}
                 <div className="space-y-1.5 p-3 rounded-xl bg-amber-500/[0.06] border border-amber-500/25">
                   <label className="text-xs text-gray-300 font-medium flex items-center justify-between">
-                    <span>🎙️ ElevenLabs (la voz más humana — prioridad máxima):</span>
+                    <span>🎙️ Claves de ElevenLabs (para el puesto que le asignes arriba):</span>
                     {elevenInfo && (
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono border ${
                         elevenInfo.configured
@@ -1674,46 +1710,11 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                     )}
                   </label>
 
-                  {elevenVoices.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={speechConfig.elevenVoice || ''}
-                        onChange={(e) => onUpdateSpeechConfig({ elevenVoice: e.target.value || undefined })}
-                        className="flex-1 bg-black/80 border border-amber-500/30 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none cursor-pointer truncate"
-                      >
-                        <option value="">— No usar ElevenLabs (usar Gemini) —</option>
-                        {elevenVoices.map(v => (
-                          <option key={v.id} value={v.id}>
-                            {v.name} {v.accent ? `(${v.accent}${v.gender ? ', ' + v.gender : ''})` : ''}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!speechConfig.elevenVoice) return;
-                          setTestingVoice('neural');
-                          const speechService = SpeechService.getInstance();
-                          speechService.updateConfig({ ...speechConfig, ttsEngine: 'neural' });
-                          speechService.speak("Hola, así suena mi voz con ElevenLabs. Reproduciendo tus canciones favoritas.");
-                          setTimeout(() => setTestingVoice(null), 8000);
-                        }}
-                        disabled={!speechConfig.elevenVoice}
-                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-amber-600/25 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40"
-                      >
-                        <Play size={12} fill="currentColor" />
-                        <span>Probar</span>
-                      </button>
-                    </div>
-                  )}
-
                   <div className="flex items-start gap-2">
                     <textarea
                       value={elevenKeyInput}
                       onChange={(e) => { setElevenKeyInput(e.target.value); setElevenStatus('idle'); }}
-                      placeholder={elevenVoices.length > 0
-                        ? 'Añadir más claves sk_... (separadas por coma o salto de línea; reemplaza las actuales)'
-                        : 'Pega hasta 10 claves sk_... separadas por comas o saltos de línea'}
+                      placeholder="Añadir claves sk_... (separadas por coma o salto de línea; reemplaza las actuales)"
                       rows={2}
                       autoComplete="off"
                       spellCheck={false}
@@ -1735,7 +1736,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                   </div>
 
                   {elevenStatus === 'ok' && (
-                    <p className="text-[10px] text-emerald-300">✓ Claves guardadas. La primera fue validada contra ElevenLabs{elevenVoices.length === 0 ? '; ahora elige tu voz en el selector que apareció arriba.' : '. Cuando una clave agote sus caracteres, la app rota sola a la siguiente.'}</p>
+                    <p className="text-[10px] text-emerald-300">✓ Claves guardadas. La primera fue validada contra ElevenLabs. Cuando una clave agote sus caracteres, la app rota sola a la siguiente.</p>
                   )}
                   {elevenStatus === 'invalid' && (
                     <p className="text-[10px] text-amber-300">⚠ ElevenLabs rechazó la primera clave. Debe empezar por sk_ y estar activa (revísala en elevenlabs.io → API Keys).</p>
@@ -1855,24 +1856,14 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
 
                 {neuralProvider === 'google-translate' && (
                   <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-200 leading-relaxed">
-                    ⚠️ <strong>Modo básico activo (sin clave de Gemini):</strong> todas las voces suenan iguales y no aplican tono ni velocidad, porque se está usando el respaldo gratuito de Google Translate. Para activar las voces neuronales reales (cada una distinta, tono y velocidad funcionales), consigue tu clave gratuita en <strong>aistudio.google.com → Get API key</strong> y pégala en la línea <code className="font-mono text-amber-100">GEMINI_API_KEY=tu_clave</code> del archivo <code className="font-mono text-amber-100">.env</code> del proyecto. Al desplegar en AI Studio funciona solo, sin configurar nada.
+                    ⚠️ <strong>Modo básico activo:</strong> no hay claves de Gemini/ElevenLabs configuradas, así que se está usando el respaldo gratuito de Google Translate (una sola voz, sin tono ni velocidad). Añade claves arriba para activar las voces neuronales reales.
                   </div>
                 )}
 
-                <p className="text-[10px] text-gray-400 leading-relaxed">
-                  🧠 Voces neuronales generadas por IA en la nube de Microsoft (las mismas del "Leer en voz alta" de Edge): entonación y pausas humanas, muy superiores a las voces robóticas del sistema.
-                  {!isNeuralTtsSupported() && (
-                    <span className="text-amber-300"> ⚠ Este navegador/contexto no soporta el motor neuronal; se usará el de respaldo.</span>
-                  )}
-                  {' '}Requieren internet; si falla la conexión, el asistente cambia automáticamente a la voz del navegador.
-                </p>
-              </div>
-            )}
-
-            {/* Voice Dropdown Selector (respaldo del navegador) */}
-            <div className={`space-y-1.5 transition-opacity ${speechConfig.ttsEngine !== 'browser' ? 'opacity-45' : ''}`}>
+            {/* Voice Dropdown Selector (voces Edge del navegador) */}
+            <div className={`space-y-1.5 transition-opacity ${speechConfig.voicePriority?.includes('edge') ? 'opacity-45' : ''}`}>
               <label className="text-xs text-gray-300 font-medium flex items-center justify-between">
-                <span>{speechConfig.ttsEngine !== 'browser' ? 'Voz de Respaldo del Navegador (si falla la neural):' : 'Voz Seleccionada:'}</span>
+                <span>{speechConfig.voicePriority?.includes('edge') ? '🖥️ Voces Edge (la voz exacta también se elige en su puesto):' : '🖥️ Voces Edge del Navegador:'}</span>
                 <span className="text-[10px] text-gray-400 font-mono">
                   {browserVoices.length > 0 ? `${browserVoices.length} voces detectadas` : 'Cargando voces...'}
                 </span>
