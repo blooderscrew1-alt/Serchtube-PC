@@ -326,7 +326,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
 
   const [elevenKeyInput, setElevenKeyInput] = useState<string>('');
   const [elevenStatus, setElevenStatus] = useState<'idle' | 'saving' | 'ok' | 'invalid' | 'error'>('idle');
-  const [elevenInfo, setElevenInfo] = useState<{ configured: boolean; masked: string; charactersRemaining?: number } | null>(null);
+  const [elevenInfo, setElevenInfo] = useState<{ configured: boolean; count: number; max: number; masked: string[] } | null>(null);
   const [elevenVoices, setElevenVoices] = useState<Array<{ id: string; name: string; accent: string; gender: string }>>([]);
 
   useEffect(() => {
@@ -348,16 +348,42 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
       const res = await fetch('/api/eleven-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: elevenKeyInput.trim() })
+        body: JSON.stringify({ keys: elevenKeyInput.trim() })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Error');
       setElevenStatus('ok');
-      setElevenInfo({ configured: true, masked: `${elevenKeyInput.trim().slice(0, 5)}••••••${elevenKeyInput.trim().slice(-4)}`, charactersRemaining: data.charactersRemaining });
       setElevenKeyInput('');
+      fetch('/api/eleven-key').then(r => r.json()).then(info => setElevenInfo(info)).catch(() => {});
       fetch('/api/eleven-voices').then(r => r.json()).then(d => setElevenVoices(d.voices || [])).catch(() => {});
     } catch (err: any) {
       setElevenStatus(err?.message?.includes('rechaz') ? 'invalid' : 'error');
+    }
+  };
+
+  const [bulkKeysInput, setBulkKeysInput] = useState<string>('');
+  const [bulkStatus, setBulkStatus] = useState<'idle' | 'saving' | 'ok' | 'error'>('idle');
+  const [bulkResult, setBulkResult] = useState<{ detected: number; ignored: number; eleven: { count: number; added: number }; gemini: { count: number; added: number } } | null>(null);
+
+  const saveBulkKeys = async () => {
+    if (!bulkKeysInput.trim()) return;
+    setBulkStatus('saving');
+    try {
+      const res = await fetch('/api/tts-keys-bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: bulkKeysInput })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Error');
+      setBulkResult(data);
+      setBulkStatus('ok');
+      setBulkKeysInput('');
+      fetch('/api/eleven-key').then(r => r.json()).then(info => setElevenInfo(info)).catch(() => {});
+      fetch('/api/tts-key').then(r => r.json()).then(info => setApiKeyInfo(info)).catch(() => {});
+      fetch('/api/eleven-voices').then(r => r.json()).then(d => setElevenVoices(d.voices || [])).catch(() => {});
+    } catch (_) {
+      setBulkStatus('error');
     }
   };
 
@@ -1643,12 +1669,12 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                           ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
                           : 'bg-gray-500/20 text-gray-300 border-gray-500/30'
                       }`}>
-                        {elevenInfo.configured ? `✓ ${elevenInfo.masked}${typeof elevenInfo.charactersRemaining === 'number' ? ` • ${elevenInfo.charactersRemaining.toLocaleString()} car. restantes` : ''}` : 'sin clave'}
+                        {elevenInfo.configured ? `✓ ${elevenInfo.count} clave${elevenInfo.count !== 1 ? 's' : ''} guardada${elevenInfo.count !== 1 ? 's' : ''}` : 'sin clave'}
                       </span>
                     )}
                   </label>
 
-                  {elevenVoices.length > 0 ? (
+                  {elevenVoices.length > 0 && (
                     <div className="flex items-center gap-2">
                       <select
                         value={speechConfig.elevenVoice || ''}
@@ -1679,45 +1705,91 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                         <span>Probar</span>
                       </button>
                     </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="password"
-                        value={elevenKeyInput}
-                        onChange={(e) => { setElevenKeyInput(e.target.value); setElevenStatus('idle'); }}
-                        onKeyDown={(e) => { if (e.key === 'Enter') saveElevenKey(); }}
-                        placeholder="Pega tu clave sk_... (elevenlabs.io → perfil → API Keys)"
-                        autoComplete="off"
-                        className="flex-1 bg-black/80 border border-white/20 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none placeholder:text-gray-500 placeholder:font-sans"
-                      />
-                      <button
-                        type="button"
-                        onClick={saveElevenKey}
-                        disabled={!elevenKeyInput.trim() || elevenStatus === 'saving'}
-                        className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                          elevenStatus === 'ok'
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-amber-600/25 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40'
-                        }`}
-                      >
-                        <Check size={12} />
-                        <span>{elevenStatus === 'saving' ? 'Validando...' : elevenStatus === 'ok' ? 'Guardada' : 'Guardar'}</span>
-                      </button>
-                    </div>
                   )}
 
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      value={elevenKeyInput}
+                      onChange={(e) => { setElevenKeyInput(e.target.value); setElevenStatus('idle'); }}
+                      placeholder={elevenVoices.length > 0
+                        ? 'Añadir más claves sk_... (separadas por coma o salto de línea; reemplaza las actuales)'
+                        : 'Pega hasta 10 claves sk_... separadas por comas o saltos de línea'}
+                      rows={2}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="flex-1 bg-black/80 border border-white/20 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none placeholder:text-gray-500 placeholder:font-sans resize-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveElevenKey}
+                      disabled={!elevenKeyInput.trim() || elevenStatus === 'saving'}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        elevenStatus === 'ok'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-amber-600/25 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40'
+                      }`}
+                    >
+                      <Check size={12} />
+                      <span>{elevenStatus === 'saving' ? 'Validando...' : elevenStatus === 'ok' ? 'Guardadas' : 'Guardar'}</span>
+                    </button>
+                  </div>
+
                   {elevenStatus === 'ok' && (
-                    <p className="text-[10px] text-emerald-300">✓ Clave validada. Ahora elige tu voz en el selector que apareció arriba.</p>
+                    <p className="text-[10px] text-emerald-300">✓ Claves guardadas. La primera fue validada contra ElevenLabs{elevenVoices.length === 0 ? '; ahora elige tu voz en el selector que apareció arriba.' : '. Cuando una clave agote sus caracteres, la app rota sola a la siguiente.'}</p>
                   )}
                   {elevenStatus === 'invalid' && (
-                    <p className="text-[10px] text-amber-300">⚠ ElevenLabs rechazó la clave. Debe empezar por sk_ y estar activa (revísala en elevenlabs.io → API Keys).</p>
+                    <p className="text-[10px] text-amber-300">⚠ ElevenLabs rechazó la primera clave. Debe empezar por sk_ y estar activa (revísala en elevenlabs.io → API Keys).</p>
                   )}
                   {elevenStatus === 'error' && (
-                    <p className="text-[10px] text-red-300">✗ No se pudo contactar al servidor para guardar la clave.</p>
+                    <p className="text-[10px] text-red-300">✗ No se pudo contactar al servidor para guardar las claves.</p>
                   )}
 
                   <p className="text-[10px] text-gray-400 leading-relaxed">
-                    Cuenta gratis en <strong className="text-gray-300">elevenlabs.io</strong>: ~10.000 caracteres/mes (cientos de respuestas). Si se agota o falla, el asistente cae solo a Gemini y luego a las voces del navegador. Puedes alternar entre ElevenLabs y Gemini con el selector.
+                    Cuentas gratis en <strong className="text-gray-300">elevenlabs.io</strong>: ~10.000 caracteres/mes por cuenta. Con varias claves la app rota sola y multiplica tus respuestas (hasta 10 claves). Cuando todas se agoten, cae a Gemini y luego a las voces del navegador.
+                  </p>
+                </div>
+
+                {/* Carga en lote: auto-detecta el proveedor de cada clave */}
+                <div className="space-y-1.5 p-3 rounded-xl bg-sky-500/[0.06] border border-sky-500/25">
+                  <label className="text-xs text-sky-200 font-medium flex items-center justify-between">
+                    <span>📝 Añadir claves en lote (auto-detecta el proveedor):</span>
+                  </label>
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      value={bulkKeysInput}
+                      onChange={(e) => { setBulkKeysInput(e.target.value); setBulkStatus('idle'); }}
+                      placeholder={'Pega aquí todo el texto tal cual, con nombres y etiquetas incluidos. Ej:\nelevenlabs cuenta1\nsk_73f16b...\ngemini cuenta2\nAQ.Ab8RN6...\n\nLa app detecta cada clave por su formato: sk_ → ElevenLabs, AQ./AIza → Gemini'}
+                      rows={5}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="flex-1 bg-black/80 border border-white/20 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-sky-500 focus:outline-none placeholder:text-gray-500 placeholder:font-sans resize-y"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveBulkKeys}
+                      disabled={!bulkKeysInput.trim() || bulkStatus === 'saving'}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        bulkStatus === 'ok'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-sky-600/25 hover:bg-sky-600/50 text-sky-100 border border-sky-500/40'
+                      }`}
+                    >
+                      <Check size={12} />
+                      <span>{bulkStatus === 'saving' ? 'Procesando...' : bulkStatus === 'ok' ? 'Añadidas' : 'Agregar en lote'}</span>
+                    </button>
+                  </div>
+
+                  {bulkStatus === 'ok' && bulkResult && (
+                    <p className="text-[10px] text-emerald-300">
+                      ✓ Detectadas {bulkResult.detected} claves: <strong>{bulkResult.eleven.added}</strong> nuevas de ElevenLabs (total {bulkResult.eleven.count}) y <strong>{bulkResult.gemini.added}</strong> nuevas de Gemini (total {bulkResult.gemini.count}).{bulkResult.ignored > 0 ? ` ${bulkResult.ignored} duplicadas omitidas.` : ''}
+                    </p>
+                  )}
+                  {bulkStatus === 'error' && (
+                    <p className="text-[10px] text-red-300">✗ No se pudo procesar el texto. ¿La app está corriendo con su servidor?</p>
+                  )}
+
+                  <p className="text-[10px] text-gray-400 leading-relaxed">
+                    No importa el formato: pega el bloque completo con nombres de cuentas, líneas vacías o separadores. La app extrae solo las claves válidas por su patrón y las añade a cada proveedor (máx. 10 por proveedor, sin duplicados). Las claves se validan solas al usarse.
                   </p>
                 </div>
 

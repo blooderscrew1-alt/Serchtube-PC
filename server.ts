@@ -2145,59 +2145,102 @@ async function startServer() {
   }
   const GEMINI_TTS_MODELS = ["gemini-2.5-flash-preview-tts"];
 
-  // ═══ ElevenLabs: voces ultra-realistas (plan gratuito ~10.000 caracteres/mes) ═══
-  let elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || "";
+  // ═══ ElevenLabs: voces ultra-realistas (plan gratuito ~10.000 caracteres/mes por clave) ═══
+  // Hasta 10 claves rotativas: cuando una agota sus caracteres (429/quota) o es
+  // inválida (401), se prueba la siguiente automáticamente.
+  function parseElevenKeys(...vals: (string | undefined)[]): string[] {
+    const out: string[] = [];
+    for (const val of vals) {
+      if (!val) continue;
+      for (const part of val.split(/[,\n]/)) {
+        const k = part.trim();
+        if (k && !out.includes(k)) out.push(k);
+      }
+    }
+    return out;
+  }
+
+  let elevenLabsKeys: string[] = parseElevenKeys(process.env.ELEVENLABS_API_KEYS, process.env.ELEVENLABS_API_KEY).slice(0, 10);
+  let workingElevenIdx = 0;
+  let elevenLabsQuotaExhausted = false; // true solo si todas las claves agotaron caracteres
+
   const ELEVEN_TTS_MODEL = "eleven_multilingual_v2"; // la más realista, español nativo
 
-  function persistElevenLabsApiKey(key: string) {
+  function persistElevenLabsApiKeys(keys: string[]) {
     const envPath = path.join(process.cwd(), ".env");
     let content = "";
     try {
       content = fs.readFileSync(envPath, "utf8");
     } catch (_) {}
-    const line = `ELEVENLABS_API_KEY="${key}"`;
-    if (/^ELEVENLABS_API_KEY=.*$/m.test(content)) {
-      content = content.replace(/^ELEVENLABS_API_KEY=.*$/m, line);
-    } else {
-      content = content.replace(/\s*$/, "") + (content.trim() ? "\n" : "") + line + "\n";
-    }
+    const setValue = (name: string, value: string) => {
+      const line = `${name}="${value}"`;
+      if (new RegExp(`^${name}=.*$`, "m").test(content)) {
+        content = content.replace(new RegExp(`^${name}=.*$`, "m"), line);
+      } else {
+        content = content.replace(/\s*$/, "") + (content.trim() ? "\n" : "") + line + "\n";
+      }
+    };
+    setValue("ELEVENLABS_API_KEYS", keys.join(","));
+    if (keys.length > 0) setValue("ELEVENLABS_API_KEY", keys[0]);
     fs.writeFileSync(envPath, content, "utf8");
   }
 
   let lastElevenError = "";
 
   async function synthesizeWithElevenLabs(text: string, voiceId: string, speed = 1): Promise<{ body: Buffer; contentType: string } | null> {
-    if (!elevenLabsApiKey || !voiceId) return null;
+    if (elevenLabsKeys.length === 0 || !voiceId) return null;
     lastElevenError = "";
-    try {
-      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
-        method: "POST",
-        headers: {
-          "xi-api-key": elevenLabsApiKey,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          text,
-          model_id: ELEVEN_TTS_MODEL,
-          voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true, speed }
-        })
-      });
-      if (!res.ok) {
-        lastElevenError = `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
-        console.warn("[TTS-ElevenLabs] Fallo:", lastElevenError);
-        return null;
+    let sawQuota = false;
+    let sawVoiceRestriction = false;
+
+    for (let k = 0; k < elevenLabsKeys.length; k++) {
+      const keyIdx = (workingElevenIdx + k) % elevenLabsKeys.length;
+      const apiKey = elevenLabsKeys[keyIdx];
+      try {
+        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            text,
+            model_id: ELEVEN_TTS_MODEL,
+            voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true, speed }
+          })
+        });
+        if (!res.ok) {
+          lastElevenError = `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
+          console.warn(`[TTS-ElevenLabs] Clave #${keyIdx + 1} falló:`, lastElevenError);
+          if (/402/.test(lastElevenError)) {
+            // Voz no disponible con ese plan: rotar no siempre ayuda, pero una
+            // clave de pago posterior sí podría; seguimos con la siguiente
+            sawVoiceRestriction = true;
+          } else if (/401|429|quota|character/i.test(lastElevenError)) {
+            sawQuota = true;
+          }
+          continue;
+        }
+        const body = Buffer.from(await res.arrayBuffer());
+        if (body.length < 100) {
+          lastElevenError = "respuesta sin audio";
+          continue;
+        }
+        workingElevenIdx = keyIdx;
+        elevenLabsQuotaExhausted = false;
+        return { body, contentType: "audio/mpeg" };
+      } catch (err: any) {
+        lastElevenError = err?.message || "error de red";
+        console.warn(`[TTS-ElevenLabs] Clave #${keyIdx + 1} error:`, lastElevenError);
       }
-      const body = Buffer.from(await res.arrayBuffer());
-      if (body.length < 100) {
-        lastElevenError = "respuesta sin audio";
-        return null;
-      }
-      return { body, contentType: "audio/mpeg" };
-    } catch (err: any) {
-      lastElevenError = err?.message || "error de red";
-      console.warn("[TTS-ElevenLabs] Error:", lastElevenError);
-      return null;
     }
+
+    elevenLabsQuotaExhausted = sawQuota;
+    if (sawQuota) console.warn("[TTS-ElevenLabs] Todas las claves sin caracteres disponibles");
+    // Si el fallo fue solo por restricción de voz (402), dejamos que la cadena
+    // continúe hacia Gemini en vez de cortar a las voces del navegador.
+    if (sawVoiceRestriction && !sawQuota) lastElevenError = "voice-restricted: " + lastElevenError;
+    return null;
   }
 
   const ttsAudioCache = new Map<string, { body: Buffer; contentType: string }>();
@@ -2337,8 +2380,8 @@ async function startServer() {
       let provider = "none";
 
       // 1) ElevenLabs (si hay clave y voz elegida, o el motor lo pide explícito)
-      const wantsEleven = engine === "elevenlabs" || (!engine && elvoice && !!elevenLabsApiKey);
-      if (wantsEleven && elevenLabsApiKey && elvoice) {
+      const wantsEleven = engine === "elevenlabs" || (!engine && elvoice && elevenLabsKeys.length > 0);
+      if (wantsEleven && elevenLabsKeys.length > 0 && elvoice) {
         result = await synthesizeWithElevenLabs(text, elvoice, speed);
         provider = "elevenlabs";
       }
@@ -2349,8 +2392,8 @@ async function startServer() {
         provider = "gemini";
       }
 
-      if (!result && ((geminiTtsKeys.length > 0 && geminiKeysExhausted) || engine === "elevenlabs")) {
-        // Cuotas agotadas (o motor ElevenLabs sin audio disponible): NO usar Google Translate.
+      if (!result && ((geminiTtsKeys.length > 0 && geminiKeysExhausted) || (engine === "elevenlabs" && elevenLabsQuotaExhausted))) {
+        // Cuotas agotadas: NO usar Google Translate.
         // Responder 503 para que el cliente use las voces locales del navegador.
         res.set("X-TTS-Provider", "browser-fallback");
         return res.status(503).json({ error: "Cuota de voces neuronales agotada. Usando voces del navegador." });
@@ -2451,54 +2494,60 @@ async function startServer() {
     }
   });
 
-  // Estado de la clave de ElevenLabs (enmascarada)
+  // Estado de las claves de ElevenLabs (enmascaradas)
   app.get("/api/eleven-key", (req, res) => {
-    const k = elevenLabsApiKey;
     res.json({
-      configured: !!k,
-      masked: k ? `${k.slice(0, 5)}••••••${k.slice(-4)}` : ""
+      configured: elevenLabsKeys.length > 0,
+      count: elevenLabsKeys.length,
+      max: 10,
+      masked: elevenLabsKeys.map(k => `${k.slice(0, 5)}••••••${k.slice(-4)}`)
     });
   });
 
-  // Guarda la clave de ElevenLabs desde la UI y la valida contra su API
+  // Guarda hasta 10 claves de ElevenLabs desde la UI y valida la primera
   app.post("/api/eleven-key", async (req, res) => {
     try {
-      const key = String(req.body?.key || "").trim().replace(/^["']|["']$/g, "");
-      if (!key) return res.status(400).json({ error: "Falta la clave" });
-      if (!key.startsWith("sk_")) return res.status(400).json({ error: "Las claves de ElevenLabs empiezan con sk_" });
+      const raw = String(req.body?.keys ?? req.body?.key ?? "");
+      const keys = parseElevenKeys(raw.replace(/^["']|["']$/g, "")).slice(0, 10);
+      if (keys.length === 0) return res.status(400).json({ error: "Falta la clave" });
+      const badFormat = keys.find(k => !k.startsWith("sk_"));
+      if (badFormat) return res.status(400).json({ error: "Las claves de ElevenLabs empiezan con sk_" });
 
-      // Validación real contra su API
+      // Validación real solo de la primera clave contra su API
       const check = await fetch("https://api.elevenlabs.io/v1/user/subscription", {
-        headers: { "xi-api-key": key }
+        headers: { "xi-api-key": keys[0] }
       });
       if (!check.ok) {
-        return res.status(400).json({ saved: false, valid: false, error: "ElevenLabs rechazó la clave (inválida o revocada)" });
+        return res.status(400).json({ saved: false, valid: false, error: "ElevenLabs rechazó la primera clave (inválida o revocada)" });
       }
       const sub: any = await check.json();
 
-      elevenLabsApiKey = key;
+      elevenLabsKeys = keys;
+      workingElevenIdx = 0;
+      elevenLabsQuotaExhausted = false;
       try {
-        persistElevenLabsApiKey(key);
+        persistElevenLabsApiKeys(keys);
       } catch (err: any) {
         console.warn("[ElevenLabs-Key] No se pudo escribir el .env:", err?.message);
       }
 
       return res.json({
         saved: true,
+        count: keys.length,
         valid: true,
         charactersRemaining: Math.max(0, (sub?.character_limit || 0) - (sub?.character_count || 0))
       });
     } catch (err: any) {
-      return res.status(500).json({ error: err?.message || "Error validando la clave" });
+      return res.status(500).json({ error: err?.message || "Error validando las claves" });
     }
   });
 
   // Lista de voces disponibles en la cuenta de ElevenLabs
   app.get("/api/eleven-voices", async (req, res) => {
-    if (!elevenLabsApiKey) return res.status(400).json({ error: "Sin clave de ElevenLabs" });
+    if (elevenLabsKeys.length === 0) return res.status(400).json({ error: "Sin clave de ElevenLabs" });
     try {
       const r = await fetch("https://api.elevenlabs.io/v1/voices", {
-        headers: { "xi-api-key": elevenLabsApiKey }
+        headers: { "xi-api-key": elevenLabsKeys[workingElevenIdx] || elevenLabsKeys[0] }
       });
       if (!r.ok) return res.status(502).json({ error: "No se pudo consultar ElevenLabs" });
       const data: any = await r.json();
@@ -2516,6 +2565,60 @@ async function startServer() {
       return res.json({ voices });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Error listando voces" });
+    }
+  });
+
+  // ═══ Carga en lote: pega texto mezclado (nombres, etiquetas, claves) y la app
+  // extrae automáticamente las claves por su formato:
+  //   sk_...            → ElevenLabs
+  //   AQ.... / AIza...  → Gemini
+  // Las claves nuevas se AÑADEN a las existentes (sin duplicados, máx. 10 por proveedor).
+  app.post("/api/tts-keys-bulk", async (req, res) => {
+    try {
+      const text = String(req.body?.text || "");
+      if (!text.trim()) return res.status(400).json({ error: "Falta el texto" });
+
+      const tokens: string[] = text.match(/\b(?:sk_[A-Za-z0-9]{20,}|AQ\.[A-Za-z0-9_-]{10,}|AIza[0-9A-Za-z_-]{30,})\b/g) || [];
+      const elevenNew = [...new Set(tokens.filter((t): boolean => t.startsWith("sk_")))];
+      const geminiNew = [...new Set(tokens.filter((t): boolean => !t.startsWith("sk_")))];
+
+      // Añadir sin duplicar, respetando el tope de 10 por proveedor
+      const merge = (current: string[], incoming: string[]) => {
+        const added = incoming.filter(k => !current.includes(k)).length;
+        const out = [...current];
+        for (const k of incoming) {
+          if (out.length >= 10) break;
+          if (!out.includes(k)) out.push(k);
+        }
+        return { out, added };
+      };
+
+      const rE = merge(elevenLabsKeys, elevenNew);
+      const rG = merge(geminiTtsKeys, geminiNew);
+      elevenLabsKeys = rE.out;
+      geminiTtsKeys = rG.out;
+      workingElevenIdx = 0;
+      workingKeyIdx = 0;
+      elevenLabsQuotaExhausted = false;
+      geminiKeysExhausted = false;
+
+      try {
+        persistElevenLabsApiKeys(elevenLabsKeys);
+        persistGeminiApiKeys(geminiTtsKeys);
+      } catch (err: any) {
+        console.warn("[TTS-Bulk] No se pudo escribir el .env:", err?.message);
+      }
+
+      const ignored = tokens.length - elevenNew.length - geminiNew.length;
+      return res.json({
+        saved: true,
+        eleven: { count: elevenLabsKeys.length, added: rE.added },
+        gemini: { count: geminiTtsKeys.length, added: rG.added },
+        detected: tokens.length,
+        ignored
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Error procesando el lote" });
     }
   });
 
