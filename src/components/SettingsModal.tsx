@@ -315,11 +315,66 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
   const [apiKeyQuota, setApiKeyQuota] = useState<boolean>(false);
   const [apiKeyInfo, setApiKeyInfo] = useState<{ configured: boolean; count: number; max: number; masked: string[] } | null>(null);
 
+  // ─── Respaldo de claves en el navegador (localStorage) ───
+  // Las claves ya persisten en el .env del PC, pero si la carpeta del proyecto se
+  // re-crea (zip nuevo) o se corre desde otra ubicación, este respaldo las
+  // restaura automáticamente al abrir Ajustes.
+  const ELEVEN_BACKUP = 'serchtube_eleven_keys_backup';
+  const GEMINI_BACKUP = 'serchtube_gemini_keys_backup';
+
+  const classifyKeys = (text: string): { eleven: string[]; gemini: string[] } => {
+    const tokens: string[] = text.match(/\b(?:sk_[A-Za-z0-9]{20,}|AQ\.[A-Za-z0-9_-]{10,}|AIza[0-9A-Za-z_-]{30,})\b/g) || [];
+    return {
+      eleven: [...new Set(tokens.filter(t => t.startsWith('sk_')))],
+      gemini: [...new Set(tokens.filter(t => !t.startsWith('sk_')))]
+    };
+  };
+
+  const mergeBackup = (storageKey: string, incoming: string[]) => {
+    if (incoming.length === 0) return;
+    try {
+      const current: string[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const merged = [...current];
+      for (const k of incoming) {
+        if (!merged.includes(k)) merged.push(k);
+      }
+      localStorage.setItem(storageKey, JSON.stringify(merged.slice(0, 10)));
+    } catch (_) {}
+  };
+
+  const restoreFromBackup = async (provider: 'eleven' | 'gemini'): Promise<boolean> => {
+    try {
+      const storageKey = provider === 'eleven' ? ELEVEN_BACKUP : GEMINI_BACKUP;
+      const backup: string[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      if (backup.length === 0) return false;
+      const endpoint = provider === 'eleven' ? '/api/eleven-key' : '/api/tts-key';
+      const body = provider === 'eleven' ? { keys: backup.join('\n') } : { keys: backup.join('\n') };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      return res.ok;
+    } catch (_) {
+      return false;
+    }
+  };
+
   useEffect(() => {
     const unsub = subscribeNeuralProvider(setNeuralProvider);
     fetch('/api/tts-key')
       .then(r => r.json())
-      .then(info => setApiKeyInfo(info))
+      .then(async (info) => {
+        if (!info?.configured) {
+          const restored = await restoreFromBackup('gemini');
+          if (restored) {
+            const fresh = await fetch('/api/tts-key').then(r => r.json()).catch(() => null);
+            setApiKeyInfo(fresh);
+            return;
+          }
+        }
+        setApiKeyInfo(info);
+      })
       .catch(() => setApiKeyInfo(null));
     return unsub;
   }, []);
@@ -332,7 +387,13 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
   useEffect(() => {
     fetch('/api/eleven-key')
       .then(r => r.json())
-      .then(info => {
+      .then(async (info) => {
+        if (!info?.configured) {
+          const restored = await restoreFromBackup('eleven');
+          if (restored) {
+            info = await fetch('/api/eleven-key').then(r => r.json()).catch(() => info);
+          }
+        }
         setElevenInfo(info);
         if (info?.configured) {
           fetch('/api/eleven-voices').then(r => r.json()).then(d => setElevenVoices(d.voices || [])).catch(() => {});
@@ -354,6 +415,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
       if (!res.ok) throw new Error(data?.error || 'Error');
       setElevenStatus('ok');
       setElevenKeyInput('');
+      mergeBackup(ELEVEN_BACKUP, classifyKeys(elevenKeyInput.trim()).eleven);
       fetch('/api/eleven-key').then(r => r.json()).then(info => setElevenInfo(info)).catch(() => {});
       fetch('/api/eleven-voices').then(r => r.json()).then(d => setElevenVoices(d.voices || [])).catch(() => {});
     } catch (err: any) {
@@ -379,6 +441,9 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
       setBulkResult(data);
       setBulkStatus('ok');
       setBulkKeysInput('');
+      const classified = classifyKeys(bulkKeysInput);
+      mergeBackup(ELEVEN_BACKUP, classified.eleven);
+      mergeBackup(GEMINI_BACKUP, classified.gemini);
       fetch('/api/eleven-key').then(r => r.json()).then(info => setElevenInfo(info)).catch(() => {});
       fetch('/api/tts-key').then(r => r.json()).then(info => setApiKeyInfo(info)).catch(() => {});
       fetch('/api/eleven-voices').then(r => r.json()).then(d => setElevenVoices(d.voices || [])).catch(() => {});
@@ -400,6 +465,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
       if (!res.ok) throw new Error(data?.error || 'Error');
       setApiKeyStatus(data.valid ? 'ok' : 'invalid');
       setApiKeyQuota(!!data.quota);
+      mergeBackup(GEMINI_BACKUP, classifyKeys(apiKeyInput.trim()).gemini);
       setApiKeyInfo({
         configured: true,
         count: data.count ?? 1,
