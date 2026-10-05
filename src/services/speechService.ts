@@ -506,6 +506,10 @@ export class SpeechService {
           if (accumulatedFinal.trim()) {
             console.log("[SpeechService] 🎙️ Final:", accumulatedFinal.trim());
             this.onTranscriptCallback?.(accumulatedFinal.trim(), true);
+            // Limpiar la cola tras emitir: si se conserva, el texto viejo se pega a la
+            // siguiente frase y "música" sola se procesa como si ya trajera comando
+            // (ejecución directa) en vez de activar la escucha con su animación.
+            this.finalTail = '';
           } else if (interimTranscript.trim()) {
             this.onTranscriptCallback?.(interimTranscript.trim(), false);
           }
@@ -668,6 +672,7 @@ export class SpeechService {
   }
 
   public resetSession() {
+    this.finalTail = '';
     if (this.recognition) {
       try {
         this.recognition.abort();
