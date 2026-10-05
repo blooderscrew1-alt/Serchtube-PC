@@ -1,0 +1,212 @@
+@import "tailwindcss";
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Enclosed Microphone in Orb Animations */
+@keyframes micPulseRing {
+  0% {
+    transform: scale(0.7);
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+@keyframes micPulseRingDelayed {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(1.25);
+    opacity: 0;
+  }
+}
+
+@keyframes micGlowBreathe {
+  0%, 100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.6)) drop-shadow(0 0 25px rgba(239, 68, 68, 0.4));
+  }
+  50% {
+    transform: scale(1.06);
+    filter: drop-shadow(0 0 20px rgba(239, 68, 68, 0.9)) drop-shadow(0 0 35px rgba(239, 68, 68, 0.6));
+  }
+}
+
+@keyframes micEqBounce1 {
+  0%, 100% { height: 6px; }
+  50% { height: 22px; }
+}
+
+@keyframes micEqBounce2 {
+  0%, 100% { height: 14px; }
+  50% { height: 28px; }
+}
+
+@keyframes micEqBounce3 {
+  0%, 100% { height: 8px; }
+  50% { height: 20px; }
+}
+
+@keyframes micEqBounce4 {
+  0%, 100% { height: 18px; }
+  50% { height: 32px; }
+}
+
+@keyframes micSpinSlow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes micSpinReverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+.animate-mic-pulse-ring {
+  animation: micPulseRing 2s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+
+.animate-mic-pulse-ring-delayed {
+  animation: micPulseRingDelayed 2s cubic-bezier(0.2, 0.8, 0.2, 1) 0.8s infinite;
+}
+
+.animate-mic-glow {
+  animation: micGlowBreathe 2s ease-in-out infinite;
+}
+
+.animate-mic-eq-1 {
+  animation: micEqBounce1 0.8s ease-in-out infinite;
+}
+.animate-mic-eq-2 {
+  animation: micEqBounce2 0.7s ease-in-out 0.15s infinite;
+}
+.animate-mic-eq-3 {
+  animation: micEqBounce3 0.9s ease-in-out 0.3s infinite;
+}
+.animate-mic-eq-4 {
+  animation: micEqBounce4 0.65s ease-in-out 0.2s infinite;
+}
+
+@keyframes sonicRipple1 {
+  0% { transform: scale(0.6); opacity: 0.8; }
+  50% { opacity: 0.4; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+
+@keyframes sonicRipple2 {
+  0% { transform: scale(0.5); opacity: 0.9; }
+  50% { opacity: 0.5; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+@keyframes sonicRipple3 {
+  0% { transform: scale(0.4); opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { transform: scale(1.1); opacity: 0; }
+}
+
+@keyframes micPulseAnim {
+  0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px rgba(239, 68, 68, 0.7)); }
+  50% { transform: scale(1.08); filter: drop-shadow(0 0 22px rgba(239, 68, 68, 1)); }
+}
+
+.animate-sonic-ripple-1 {
+  animation: sonicRipple1 2s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+}
+
+.animate-sonic-ripple-2 {
+  animation: sonicRipple2 2s cubic-bezier(0, 0.2, 0.8, 1) 0.6s infinite;
+}
+
+.animate-sonic-ripple-3 {
+  animation: sonicRipple3 2s cubic-bezier(0, 0.2, 0.8, 1) 1.2s infinite;
+}
+
+.animate-mic-pulse {
+  animation: micPulseAnim 1.6s ease-in-out infinite;
+}
+
+.animate-mic-spin-slow {
+  animation: micSpinSlow 16s linear infinite;
+}
+
+.animate-mic-spin-reverse {
+  animation: micSpinReverse 12s linear infinite;
+}
+
+/* GPU Hardware Acceleration & Layer Isolation for Smooth 60 FPS Video */
+#youtube-player-container {
+  isolation: isolate;
+  background-color: #000000;
+}
+
+#youtube-player-container iframe,
+#yt-player-iframe,
+#yt-player-iframe iframe {
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+  border: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Custom dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #000000;
+}
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Auto-Hiding Inactive Mouse Cursor & Sticky Hover Suppression */
+body.cursor-idle-hidden,
+body.cursor-idle-hidden * {
+  cursor: none !important;
+}
+
+/* When cursor is idle/hidden, suppress hover borders, glows, and toolbars on clock & center widgets */
+body.cursor-idle-hidden #screensaver-movable-clock {
+  border-color: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+body.cursor-idle-hidden #screensaver-movable-clock .group-hover\/clock\:opacity-100,
+body.cursor-idle-hidden #screensaver-movable-clock .group-hover\/clock\:opacity-90,
+body.cursor-idle-hidden #screensaver-movable-clock .group-hover\/clock\:translate-y-0 {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: translateY(8px) !important;
+}
+
+body.cursor-idle-hidden #screensaver-movable-clock .group-hover\/clock\:pointer-events-auto {
+  pointer-events: none !important;
+}
+
+

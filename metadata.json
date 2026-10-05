@@ -1,0 +1,10 @@
+{
+  "name": "SerchTube Music PC v2",
+  "description": "Centro de control multimedia manos libres y asistente de audio inteligente para conducción, descanso y sistemas multi-dispositivo con sincronización de nodos.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,193 @@
+================================================================================
+          SERCHTUBE MUSIC - REPRODUCTOR INTELIGENTE Y SISTEMA DISTRIBUIDO
+                  DESCRIPCIÓN TÉCNICA Y FUNCIONAL COMPLETA
+================================================================================
+
+1. VISIÓN GENERAL Y PROPÓSITO DEL PROYECTO
+--------------------------------------------------------------------------------
+SerchTube Music es una aplicación web y sistema distribuido multimedia de audio y video
+diseñado específicamente para entornos de conducción (pantallas de coche, tablets y
+sistemas multimedia para vehículos) y uso doméstico en alta fidelidad. 
+
+Permite la búsqueda instantánea de música mediante texto o comandos de voz en lenguaje
+natural, garantizando una reproducción continua sin interrupciones (Non-Stop Radio),
+sin requerir API Keys de YouTube de pago para la reproducción, con corrección
+ortográfica inteligente vía Google en tiempo real, taxonomía musical de géneros y una
+arquitectura de nodos cliente-servidor (Nodo Maestro vs. Nodo Satélite) conectados
+mediante WebSockets de baja latencia con emparejamiento mediante códigos QR y PIN.
+
+
+2. ARQUITECTURA DE NODOS Y CONEXIÓN DISTRIBUIDA (NODE SYNC)
+--------------------------------------------------------------------------------
+La aplicación implementa una arquitectura distribuida que permite separar el motor
+de audio físico de las interfaces de control remoto:
+
+A) NODO MAESTRO (Master Node):
+   - Es el dispositivo principal conectado al sistema de sonido o altavoces (por ejemplo,
+     la pantalla central del coche o el ordenador principal).
+   - Alberga el reproductor YouTube IFrame activo (`YouTubePlayer.tsx`).
+   - Mantiene la cola de reproducción oficial (`playlistQueue`) y el estado en tiempo real.
+   - Emite el estado de reproducción (canción actual, tiempo transcurrido, volumen, pausa/play,
+     y la cola de las próximas 20 canciones con carátulas y títulos) hacia el servidor.
+   - Responde y ejecuta los comandos recibidos desde los satélites.
+
+B) NODO SATÉLITE (Satellite Node / Control Remoto):
+   - Puede abrirse en teléfonos móviles, tablets de pasajeros o pantallas secundarias
+     ingresando la URL local (ej. `http://192.168.1.X:3000?mode=satellite`) o escaneando
+     el código QR generado por el nodo Maestro.
+   - No reproduce audio en local para evitar eco o desfases; actúa como control remoto
+     táctil y por voz de grado automotriz.
+   - Permite pausar, reanudar, adelantar/retroceder canción, controlar el volumen, enviar
+     búsquedas por voz o teclado, y seleccionar directamente cualquier canción de la cola
+     de próximas canciones para que suene de inmediato en el Maestro.
+   - Cuenta con confirmación visual instantánea (ACK en verde) al recibir órdenes.
+
+C) CANAL WEBSOCKET Y DESPACHADOR DE COMANDOS (`commandDispatcher.ts` & `nodeSync.ts`):
+   - Comunicación bidireccional continua mediante WebSockets (`ws://...`).
+   - Mecanismo de salas (`rooms`) y tokens para garantizar que sólo los dispositivos
+     emparejados compartan el control.
+   - Reconexión automática con backoff exponencial en caso de pérdida de señal Wi-Fi.
+   - Protocolo de comandos soportados:
+     * `LOAD_VIDEO`: Carga una canción específica con videoId, carátula, título y cola.
+     * `PAUSE` / `RESUME`: Pausar o reanudar reproducción.
+     * `NEXT_TRACK` / `PREVIOUS_TRACK`: Salto de canción en la cola.
+     * `SET_VOLUME`: Ajuste proporcional o absoluto del nivel de volumen.
+     * `SEEK_TO`: Desplazamiento temporal preciso dentro de la pista.
+     * `QUEUE_UPDATE`: Difusión sincrónica de las próximas 20 canciones.
+     * `HEARTBEAT` / `PING-PONG`: Verificación de latencia y estado de conexión activo.
+
+
+3. MOTOR DE BÚSQUEDA, CORRECCIÓN Y GENERACIÓN DE COLAS INTELIGENTES
+--------------------------------------------------------------------------------
+El sistema cuenta con un pipeline de tres etapas para procesar consultas de usuarios:
+
+A) CORRECCIÓN ORTOGRÁFICA EN TIEMPO REAL CON GOOGLE (`googleSearchCorrector.ts`):
+   - Utiliza las APIs de sugerencia en tiempo real de Google Search y Google YouTube.
+   - Corrige automáticamente errores tipográficos y fonéticos habituales en búsquedas
+     por voz (por ejemplo: "neberita" -> "Neverita", "despasito" -> "Despacito",
+     "bad boni" -> "Bad Bunny") sin alterar el significado musical.
+   - Caché en memoria LRU para responder en milisegundos a consultas repetidas.
+
+B) MOTOR DE EXTRACCIÓN Y SCRAPING DE YOUTUBE (`youtubeEngine.ts`):
+   - Realiza scraping seguro de resultados de YouTube Music y YouTube Web sin necesidad
+     de claves de API de cuota limitada.
+   - Resuelve el video de mayor fidelidad de audio y carátula en alta definición.
+   - Obtiene listas de YouTube Mix asociadas al video para asegurar reproducción continua.
+
+C) TAXONOMÍA MUSICAL Y COHERENCIA DE GÉNERO (`musicContextEngine.ts`):
+   - Base de conocimiento local con clústeres de más de 100 géneros musicales (hip-hop,
+     rock en español, salsa clásica, reggaeton, pop 80s/90s, metal, electrónica, etc.).
+   - Cuando se solicita un artista o canción, resuelve automáticamente:
+     * Género principal y subgénero/época.
+     * Éxitos icónicos del mismo artista.
+     * Artistas afines y coherentes de la misma época y estilo sonoro.
+
+D) ALGORITMO ANTIDUPLICADOS Y VARIEDAD MUSICAL (`areSameSong`):
+   - Normalización matemática de títulos: elimina sufijos de videos ("Official Music Video",
+     "Audio Oficial", "Lyrics on screen", "Explicit Version", "Remastered", etc.).
+   - Igualación de variantes con símbolos y palabras (ejemplo: "&" vs "and", corchetes).
+   - Comprobación por Jaccard y substring de títulos.
+   - REGLA DE COLA DE REPRODUCCIÓN:
+     * Cuando se solicita una canción específica (ej. "Eminem 97 Bonnie & Clyde"):
+       1. Posición #1: La canción solicitada.
+       2. Posiciones #2 a #10: Otros éxitos DIFERENTES del mismo artista (ej. "The Real Slim
+          Shady", "Without Me", "Lose Yourself", "Mockingbird", "Stan", etc.), descartando
+          estrictamente cualquier otra versión o subida de la misma canción pedida.
+       3. Posiciones posteriores: Éxitos de artistas afines del mismo género (ej. Dr. Dre,
+          50 Cent, 2Pac, Snoop Dogg) y recomendaciones de YouTube Mix.
+       4. Resultado: Una lista variada de 25 a 30 canciones únicas sin repeticiones molestas.
+
+
+4. ASISTENTE DE VOZ Y LENGUAJE NATURAL
+--------------------------------------------------------------------------------
+A) RECONOCIMIENTO Y PROCESAMIENTO:
+   - Integrado mediante la Web Speech API (`SpeechRecognition`) en clientes compatibles
+     y microfonía táctil.
+   - Activación instantánea mediante el botón de micrófono en la interfaz y el orbe
+     reactivo (`ReactiveOrb.tsx`).
+   - Detección automática de intenciones: reproducir artista, reproducir canción, subir/bajar
+     volumen, pausar, saltar canción, activar modo pantalla completa o nocturno.
+
+B) SÍNTESIS DE VOZ Y PERSONALIDADES (`speechService.ts` & `speechPhrases.ts`):
+   - Síntesis de voz en español natural con modulación de tono y velocidad.
+   - Tres personalidades configurables:
+     * Animada / Entusiasta (comentarios dinámicos, tono amigable de copiloto).
+     * Sobria / Minimalista (respuestas breves y precisas para no distraer en carretera).
+     * Neutra / Asistente clásica.
+   - Mensajes de feedback dinámico al cargar canciones, pausar o sincronizar nodos.
+
+
+5. DISEÑO DE LA INTERFAZ DE USUARIO Y EXPERIENCIA VISUAL (UI/UX)
+--------------------------------------------------------------------------------
+Diseñada bajo el principio de "Cero Distracciones" y máxima visibilidad en pantallas
+táctiles de vehículos y escritorios:
+
+A) ESTÉTICA Y TEMAS:
+   - Paleta de diseño basada en negros profundos (#0a0a0c, #111116) optimizada para
+     pantallas OLED automotrices, evitando el deslumbramiento nocturno.
+   - Contraste WCAG AA garantizado con acentos en cian, ámbar y verde esmeralda.
+   - Tipografía ultra-legible de escala matemática para lectura rápida a un vistazo.
+
+B) MODO CONDUCCIÓN OLED (`OledDrivingDashboard.tsx`):
+   - Botones táctiles de gran tamaño (mínimo 64px a 80px) para facilitar pulsaciones
+     rápidas sin apartar la vista del camino.
+   - Visualización prominente del reloj digital, título de pista, artista, barra de
+     progreso deslizable y controles de reproducción primarios.
+
+C) SALVAPANTALLAS OLED INTELIGENTE (`ScreensaverOverlay.tsx`):
+   - Se activa tras inactividad o bajo demanda.
+   - Diseñado con desplazamiento sutil de píxeles para prevenir el "burn-in" o quemado
+     de pantalla en paneles OLED montados en vehículos.
+   - Muestra la hora actual, fecha, carátula difuminada flotante y estado de la música.
+
+D) VISUALIZADOR DE AUDIO REACTIVO Y ORBE (`ReactiveOrb.tsx` & `audioEngine.ts`):
+   - Gráficos reactivos por WebGL / HTML5 Canvas conectados al Web Audio API.
+   - Animación de espectro sonoro y ondas que responden dinámicamente al ritmo y la voz.
+
+E) TECLADO TÁCTIL EN PANTALLA (`KeyboardInputOverlay.tsx`):
+   - Teclado virtual optimizado para pantallas táctiles de coche donde no se dispone
+     de teclado físico ni teclado virtual del sistema operativo.
+
+F) MENÚS MODALES AVANZADOS:
+   - `NodeSyncModal.tsx`: Panel de emparejamiento con código QR, selector Maestro/Satélite,
+     indicadores de latencia en ms y lista de dispositivos conectados.
+   - `EqualizerModal.tsx`: Ecualizador gráfico con presets sonoros (Rock, Bass Boost,
+     Vocal, Flat, etc.).
+   - `SettingsModal.tsx`: Ajustes de personalización, voz del asistente, comportamiento
+     de pantalla completa automático y calidad de reproducción.
+   - `QualityMenuPopover.tsx`: Selector de resolución de video y bitrate de audio.
+
+
+6. PERSISTENCIA Y SINCRONIZACIÓN DE ESTADO
+--------------------------------------------------------------------------------
+- Almacenamiento local mediante `localStorage` de:
+  * Última canción reproducida y segundo exacto de reproducción (para reanudar tras reiniciar).
+  * Preferencias de volumen y configuración del asistente.
+  * Historial de búsquedas recientes y nodo ID emparejado.
+- Integración nativa con `navigator.mediaSession` (`chromeMediaService.ts`):
+  * Permite controlar la reproducción desde los mandos del volante del coche, la barra
+    de notificaciones de Android/iOS o los botones multimedia del teclado físico.
+  * Envío de metadatos completos: carátulas en alta resolución (96x96, 128x128, 512x512),
+    título de la canción, artista y nombre del álbum.
+
+
+7. STACK TECNOLÓGICO Y HERRAMIENTAS
+--------------------------------------------------------------------------------
+- Frontend:
+  * React 18 con TypeScript en modo SPA estricto.
+  * Tailwind CSS para utilidades visuales responsive de alta velocidad.
+  * Lucide React para iconografía vectorial automotriz consistente.
+  * Motion / React (Framer Motion) para micro-interacciones suaves.
+  * HTML5 Canvas y Web Audio API para análisis espectral.
+- Backend y Red:
+  * Node.js con Express y TypeScript (`tsx` en desarrollo, `esbuild` para producción).
+  * Servidor WebSocket integrado (`ws`) para telemetría y control multi-nodo.
+  * Motores de scraping y resolución sin dependencias de API keys de terceros.
+- Puerto y Despliegue:
+  * Puerto estándar: `3000` (host `0.0.0.0` para acceso en red local y contenedores).
+  * Soporte multiplataforma: Chrome, Edge, Safari, navegadores basados en Android Auto,
+    sistemas Android para coche y ordenadores de sobremesa.
+
+================================================================================
+                    FIN DEL DOCUMENTO DE ESPECIFICACIÓN
+================================================================================
