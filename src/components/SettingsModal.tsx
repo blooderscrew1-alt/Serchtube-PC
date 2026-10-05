@@ -310,11 +310,45 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
 
   const [testingVoice, setTestingVoice] = useState<VoicePersonality | 'custom_browser' | 'neural' | null>(null);
   const [neuralProvider, setNeuralProvider] = useState<string>(getNeuralProvider());
+  const [apiKeyInput, setApiKeyInput] = useState<string>('');
+  const [apiKeyStatus, setApiKeyStatus] = useState<'idle' | 'saving' | 'ok' | 'invalid' | 'error'>('idle');
+  const [apiKeyQuota, setApiKeyQuota] = useState<boolean>(false);
+  const [apiKeyInfo, setApiKeyInfo] = useState<{ configured: boolean; count: number; max: number; masked: string[] } | null>(null);
 
   useEffect(() => {
     const unsub = subscribeNeuralProvider(setNeuralProvider);
+    fetch('/api/tts-key')
+      .then(r => r.json())
+      .then(info => setApiKeyInfo(info))
+      .catch(() => setApiKeyInfo(null));
     return unsub;
   }, []);
+
+  const saveGeminiApiKey = async () => {
+    if (!apiKeyInput.trim()) return;
+    setApiKeyStatus('saving');
+    try {
+      const res = await fetch('/api/tts-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: apiKeyInput.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Error');
+      setApiKeyStatus(data.valid ? 'ok' : 'invalid');
+      setApiKeyQuota(!!data.quota);
+      setApiKeyInfo({
+        configured: true,
+        count: data.count ?? 1,
+        max: 10,
+        masked: Array.from({ length: data.count ?? 1 }, (_, i) => `clave ${i + 1}`)
+      });
+      if (data.valid) setApiKeyInput('');
+      fetch('/api/tts-key').then(r => r.json()).then(info => setApiKeyInfo(info)).catch(() => {});
+    } catch (_) {
+      setApiKeyStatus('error');
+    }
+  };
   const [customVideoInput, setCustomVideoInput] = useState<string>(screensaverConfig.customVideoUrl || '');
   const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [shutdownCountdown, setShutdownCountdown] = useState<string>('');
@@ -1560,6 +1594,66 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                     <Play size={12} fill="currentColor" />
                     <span>{testingVoice === 'neural' ? 'Hablando...' : 'Probar'}</span>
                   </button>
+                </div>
+
+                {/* Claves de API personales (Gemini) sin tocar el .env */}
+                <div className="space-y-1.5 p-3 rounded-xl bg-white/[0.03] border border-white/10">
+                  <label className="text-xs text-gray-300 font-medium flex items-center justify-between">
+                    <span>Tus Claves de API (activan las voces neuronales reales):</span>
+                    {apiKeyInfo && (
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono border ${
+                        apiKeyInfo.configured
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                          : 'bg-gray-500/20 text-gray-300 border-gray-500/30'
+                      }`}>
+                        {apiKeyInfo.configured ? `✓ ${apiKeyInfo.count} clave${apiKeyInfo.count !== 1 ? 's' : ''} guardada${apiKeyInfo.count !== 1 ? 's' : ''}` : 'sin claves'}
+                      </span>
+                    )}
+                  </label>
+
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      value={apiKeyInput}
+                      onChange={(e) => { setApiKeyInput(e.target.value); setApiKeyStatus('idle'); }}
+                      placeholder={'Pega hasta 10 claves separadas por comas o saltos de línea.\nEj: AIza..., AQ.Ab8..., AIza...'}
+                      rows={3}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="flex-1 bg-black/80 border border-white/20 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-emerald-500 focus:outline-none placeholder:text-gray-500 placeholder:font-sans resize-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveGeminiApiKey}
+                      disabled={!apiKeyInput.trim() || apiKeyStatus === 'saving'}
+                      className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                        apiKeyStatus === 'ok'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-emerald-600/25 hover:bg-emerald-600/50 text-emerald-100 border border-emerald-500/40'
+                      }`}
+                    >
+                      <Check size={12} />
+                      <span>{apiKeyStatus === 'saving' ? 'Guardando...' : apiKeyStatus === 'ok' ? 'Guardadas' : 'Guardar'}</span>
+                    </button>
+                  </div>
+
+                  {apiKeyStatus === 'ok' && !apiKeyQuota && (
+                    <p className="text-[10px] text-emerald-300">✓ Claves guardadas y la primera validada contra Google. Las voces neuronales reales están activas; cuando una clave agote su cuota del día, la app rota sola a la siguiente.</p>
+                  )}
+                  {apiKeyStatus === 'ok' && apiKeyQuota && (
+                    <p className="text-[10px] text-emerald-300">✓ Claves válidas y guardadas. La cuota gratuita de hoy ya está agotada; cuando se renueve (o con otras claves con cuota) volverán las voces neuronales automáticamente.</p>
+                  )}
+                  {apiKeyStatus === 'invalid' && (
+                    <p className="text-[10px] text-amber-300">⚠ Las claves se guardaron, pero Google rechazó la primera al probarla. Revisa que esté completa y que la API de Gemini esté habilitada.</p>
+                  )}
+                  {apiKeyStatus === 'error' && (
+                    <p className="text-[10px] text-red-300">✗ No se pudo contactar al servidor para guardar las claves. ¿La app está corriendo con su servidor?</p>
+                  )}
+
+                  <p className="text-[10px] text-gray-400 leading-relaxed">
+                    Consigue claves gratuitas en <strong className="text-gray-300">aistudio.google.com/apikey</strong> → Create API key (cada proyecto de Google tiene su propia cuota diaria de ~10 voces; con varias claves la app rota sola y multiplica tus respuestas neuronales al día, hasta 10 claves).
+                    Cuando <strong className="text-gray-300">todas</strong> las claves se agoten, el asistente usa las <strong className="text-gray-300">voces locales del navegador</strong> (Microsoft Edge) hasta el día siguiente — nunca la voz robótica de Google Translate.
+                    Se guardan en el .env automáticamente (nunca se suben a GitHub). En AI Studio no hace falta: la clave se inyecta sola.
+                  </p>
                 </div>
 
                 {neuralProvider === 'google-translate' && (

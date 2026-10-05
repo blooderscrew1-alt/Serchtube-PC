@@ -3,6 +3,7 @@ import express from "express";
 import http from "http";
 import path from "path";
 import os from "os";
+import fs from "fs";
 import { exec } from "child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import { commandDispatcher, isResumeCommand, ENABLE_SMART_CORRECTION } from "./commandDispatcher.ts";
@@ -2105,9 +2106,44 @@ async function startServer() {
   // Proveedor 2 (respaldo sin key): Google Translate TTS
   // El cliente (speechService) hace el fallback final a speechSynthesis del navegador.
   // ═══════════════════════════════════════════════════════════════════════
-  const GEMINI_TTS_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
-  const GEMINI_TTS_MODELS = ["gemini-2.5-flash-preview-tts", "gemini-2.5-flash-tts", "gemini-2.0-flash-preview-tts"];
-  let workingTtsModelIndex = 0; // se fija al primer modelo que responda correctamente
+  // ═══ Claves de API rotativas (hasta 10): cuando una agota su cuota diaria,
+  // se pasa automáticamente a la siguiente. ═══
+  function parseGeminiKeys(...vals: (string | undefined)[]): string[] {
+    const out: string[] = [];
+    for (const val of vals) {
+      if (!val) continue;
+      for (const part of val.split(/[,\n]/)) {
+        const k = part.trim();
+        if (k && !out.includes(k)) out.push(k);
+      }
+    }
+    return out;
+  }
+
+  let geminiTtsKeys: string[] = parseGeminiKeys(process.env.GEMINI_API_KEYS, process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY).slice(0, 10);
+  let workingKeyIdx = 0;
+  let geminiKeysExhausted = false; // true solo si todas las claves agotaron su cuota
+
+  /** Guarda las claves en el .env del proyecto (sin tocar las demás variables) */
+  function persistGeminiApiKeys(keys: string[]) {
+    const envPath = path.join(process.cwd(), ".env");
+    let content = "";
+    try {
+      content = fs.readFileSync(envPath, "utf8");
+    } catch (_) {}
+    const setValue = (name: string, value: string) => {
+      const line = `${name}="${value}"`;
+      if (new RegExp(`^${name}=.*$`, "m").test(content)) {
+        content = content.replace(new RegExp(`^${name}=.*$`, "m"), line);
+      } else {
+        content = content.replace(/\s*$/, "") + (content.trim() ? "\n" : "") + line + "\n";
+      }
+    };
+    setValue("GEMINI_API_KEYS", keys.join(","));
+    if (keys.length > 0) setValue("GEMINI_API_KEY", keys[0]);
+    fs.writeFileSync(envPath, content, "utf8");
+  }
+  const GEMINI_TTS_MODELS = ["gemini-2.5-flash-preview-tts"];
 
   const ttsAudioCache = new Map<string, { body: Buffer; contentType: string }>();
   const TTS_CACHE_MAX = 96;
@@ -2162,37 +2198,65 @@ async function startServer() {
     return Buffer.from(await res.arrayBuffer());
   }
 
-  async function synthesizeWithGemini(text: string, voice: string, style: string): Promise<{ body: Buffer; contentType: string } | null> {
-    if (!GEMINI_TTS_API_KEY) return null;
-    try {
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: GEMINI_TTS_API_KEY });
-      const prompt = style ? `${style}\n\n${text}` : text;
+  let lastGeminiTtsError = "";
 
-      for (let attempt = 0; attempt < GEMINI_TTS_MODELS.length; attempt++) {
-        const idx = (workingTtsModelIndex + attempt) % GEMINI_TTS_MODELS.length;
-        try {
-          const response = await ai.models.generateContent({
-            model: GEMINI_TTS_MODELS[idx],
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
-            config: {
-              responseModalities: ["AUDIO"],
-              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
-            } as any
-          });
-          const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
-          const b64 = (part as any)?.inlineData?.data;
-          if (!b64) throw new Error("respuesta sin audio");
-          workingTtsModelIndex = idx;
-          const rateMatch = /rate=(\d+)/.exec((part as any)?.inlineData?.mimeType || "");
-          const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
-          return { body: pcmBufferToWav(Buffer.from(b64, "base64"), sampleRate), contentType: "audio/wav" };
-        } catch (err: any) {
-          console.warn(`[TTS] Modelo ${GEMINI_TTS_MODELS[idx]} falló:`, err?.message);
+  /**
+   * Sintetiza con Gemini rotando las claves guardadas: si una clave agotó su
+   * cuota diaria (429 o respuesta sin audio) o es inválida, prueba con la
+   * siguiente. Devuelve null si ninguna clave pudo generar audio.
+   */
+  async function synthesizeWithGemini(text: string, voice: string, style: string): Promise<{ body: Buffer; contentType: string } | null> {
+    if (geminiTtsKeys.length === 0) return null;
+    lastGeminiTtsError = "";
+    let sawQuota = false;
+    let sawReject = false;
+
+    const prompt = style ? `${style}\n\n${text}` : text;
+    const { GoogleGenAI } = await import("@google/genai");
+
+    for (let k = 0; k < geminiTtsKeys.length; k++) {
+      const keyIdx = (workingKeyIdx + k) % geminiTtsKeys.length;
+      const apiKey = geminiTtsKeys[keyIdx];
+      try {
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: GEMINI_TTS_MODELS[0],
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
+          } as any
+        });
+        const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
+        const b64 = (part as any)?.inlineData?.data;
+        if (!b64) {
+          // Cuota de audio agotada: Google responde 200 sin pista de audio
+          lastGeminiTtsError = "respuesta sin audio";
+          console.warn(`[TTS] Clave #${keyIdx + 1} sin audio (cuota agotada probablemente)`);
+          sawQuota = true;
+          continue;
+        }
+        workingKeyIdx = keyIdx;
+        geminiKeysExhausted = false;
+        const rateMatch = /rate=(\d+)/.exec((part as any)?.inlineData?.mimeType || "");
+        const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+        return { body: pcmBufferToWav(Buffer.from(b64, "base64"), sampleRate), contentType: "audio/wav" };
+      } catch (err: any) {
+        lastGeminiTtsError = err?.message || "";
+        console.warn(`[TTS] Clave #${keyIdx + 1} falló:`, lastGeminiTtsError.slice(0, 200));
+        if (/API_KEY_INVALID|API key not valid|401|403/.test(lastGeminiTtsError)) {
+          sawReject = true;
+        } else if (/RESOURCE_EXHAUSTED|429/.test(lastGeminiTtsError)) {
+          sawQuota = true;
         }
       }
-    } catch (err: any) {
-      console.warn("[TTS] No se pudo inicializar Gemini TTS:", err?.message);
+    }
+
+    // Solo consideramos "cuota agotada" si alguna clave alcanzó su límite
+    // (si todas fueron rechazadas por inválidas, dejamos pasar al respaldo básico)
+    geminiKeysExhausted = sawQuota;
+    if (sawQuota) {
+      console.warn(`[TTS] ${geminiTtsKeys.length} clave(s) sin cuota disponible. ${sawReject ? "Algunas además inválidas." : ""}`);
     }
     return null;
   }
@@ -2214,8 +2278,15 @@ async function startServer() {
       let result = await synthesizeWithGemini(text, voice, style);
       let provider = "gemini";
 
+      if (!result && geminiTtsKeys.length > 0 && geminiKeysExhausted) {
+        // Todas las claves agotaron su cuota diaria: NO usar Google Translate.
+        // Responder 503 para que el cliente use las voces locales del navegador.
+        res.set("X-TTS-Provider", "browser-fallback");
+        return res.status(503).json({ error: "Cuota diaria de las claves neuronales agotada. Usando voces del navegador." });
+      }
+
       if (!result) {
-        // Respaldo gratuito sin API key: Google Translate TTS (troceado si excede ~200 chars)
+        // Sin claves configuradas (o inválidas): respaldo gratuito Google Translate
         const chunks = splitTextForTts(text);
         const buffers: Buffer[] = [];
         for (const chunk of chunks) {
@@ -2240,6 +2311,72 @@ async function startServer() {
     } catch (err: any) {
       console.warn("[TTS] Error generando voz:", err?.message);
       return res.status(502).json({ error: "TTS no disponible" });
+    }
+  });
+
+  // Estado de las claves de API (nunca devuelve las claves completas, solo enmascaradas)
+  app.get("/api/tts-key", (req, res) => {
+    res.json({
+      configured: geminiTtsKeys.length > 0,
+      count: geminiTtsKeys.length,
+      max: 10,
+      masked: geminiTtsKeys.map(k => `${k.slice(0, 5)}••••••${k.slice(-4)}`)
+    });
+  });
+
+  // Guarda hasta 10 claves desde la UI, las persiste en .env y valida la primera
+  app.post("/api/tts-key", async (req, res) => {
+    try {
+      const raw = String(req.body?.keys ?? req.body?.key ?? "");
+      const keys = parseGeminiKeys(raw.replace(/^["']|["']$/g, "")).slice(0, 10);
+      if (keys.length === 0) return res.status(400).json({ error: "Falta la clave" });
+      const tooShort = keys.some(k => k.length < 20);
+      if (tooShort) return res.status(400).json({ error: "Alguna clave parece demasiado corta" });
+
+      geminiTtsKeys = keys;
+      workingKeyIdx = 0;
+      geminiKeysExhausted = false;
+      try {
+        persistGeminiApiKeys(keys);
+      } catch (err: any) {
+        console.warn("[TTS-Key] No se pudo escribir el .env:", err?.message);
+      }
+
+      // Validación real solo de la PRIMERA clave (probar todas gastaría cuota).
+      // Clave válida aunque su cuota esté agotada (429) o la respuesta venga sin audio.
+      let firstKeyValid = false;
+      let quotaExceeded = false;
+      let keyRejected = false;
+      try {
+        const { GoogleGenAI } = await import("@google/genai");
+        const ai = new GoogleGenAI({ apiKey: keys[0] });
+        const response = await ai.models.generateContent({
+          model: GEMINI_TTS_MODELS[0],
+          contents: [{ role: "user", parts: [{ text: "Prueba de voz." }] }],
+          config: {
+            responseModalities: ["AUDIO"],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } }
+          } as any
+        });
+        const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
+        firstKeyValid = !!(part as any)?.inlineData?.data;
+        if (!firstKeyValid) quotaExceeded = true; // 200 sin audio = cuota de audio agotada
+      } catch (err: any) {
+        const msg = err?.message || "";
+        if (/API_KEY_INVALID|API key not valid|401|403/.test(msg)) keyRejected = true;
+        else if (/RESOURCE_EXHAUSTED|429/.test(msg)) quotaExceeded = true;
+        else console.warn("[TTS-Key] Validación sin clasificar:", msg.slice(0, 200));
+      }
+
+      return res.json({
+        saved: true,
+        count: keys.length,
+        valid: firstKeyValid || quotaExceeded,
+        quota: quotaExceeded,
+        rejected: keyRejected
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Error guardando las claves" });
     }
   });
 
