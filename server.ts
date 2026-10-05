@@ -2124,6 +2124,21 @@ async function startServer() {
   let workingKeyIdx = 0;
   let geminiKeysExhausted = false; // true solo si todas las claves agotaron su cuota
 
+  // ── Marcas de claves muertas (cuota agotada / inválida) ──────────────────────
+  // Sin esto, CADA síntesis reintentaba las 10 claves una por una y el botón
+  // "Probar" tardaba un minuto o no sonaba. Una clave marcada se salta 10 min.
+  const KEY_DEAD_TTL_MS = 10 * 60 * 1000;
+  const geminiKeyDeadUntil = new Map<string, number>();
+  const elevenKeyDeadUntil = new Map<string, number>();
+  function isKeyDead(map: Map<string, number>, key: string): boolean {
+    return (map.get(key) || 0) > Date.now();
+  }
+  function markKeyDead(map: Map<string, number>, key: string) {
+    map.set(key, Date.now() + KEY_DEAD_TTL_MS);
+  }
+  // Import del SDK de Google cacheado a nivel de servidor
+  let GoogleGenAIImport: Promise<any> | null = null;
+
   /** Guarda las claves en el .env del proyecto (sin tocar las demás variables) */
   function persistGeminiApiKeys(keys: string[]) {
     const envPath = path.join(process.cwd(), ".env");
@@ -2196,6 +2211,7 @@ async function startServer() {
     for (let k = 0; k < elevenLabsKeys.length; k++) {
       const keyIdx = (workingElevenIdx + k) % elevenLabsKeys.length;
       const apiKey = elevenLabsKeys[keyIdx];
+      if (isKeyDead(elevenKeyDeadUntil, apiKey)) continue; // sin cuota hace poco: no reintentar
       try {
         const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
           method: "POST",
@@ -2216,8 +2232,10 @@ async function startServer() {
             // Voz no disponible con ese plan: rotar no siempre ayuda, pero una
             // clave de pago posterior sí podría; seguimos con la siguiente
             sawVoiceRestriction = true;
+            markKeyDead(elevenKeyDeadUntil, apiKey);
           } else if (/401|429|quota|character/i.test(lastElevenError)) {
             sawQuota = true;
+            markKeyDead(elevenKeyDeadUntil, apiKey);
           }
           continue;
         }
@@ -2310,11 +2328,16 @@ async function startServer() {
     let sawReject = false;
 
     const prompt = style ? `${style}\n\n${text}` : text;
-    const { GoogleGenAI } = await import("@google/genai");
+    // Import del SDK cacheado: importarlo en cada llamada añadía latencia
+    if (!GoogleGenAIImport) GoogleGenAIImport = import("@google/genai");
+    const { GoogleGenAI } = await GoogleGenAIImport;
 
+    let aliveCount = 0;
     for (let k = 0; k < geminiTtsKeys.length; k++) {
       const keyIdx = (workingKeyIdx + k) % geminiTtsKeys.length;
       const apiKey = geminiTtsKeys[keyIdx];
+      if (isKeyDead(geminiKeyDeadUntil, apiKey)) continue; // sin cuota hace poco: no reintentar
+      aliveCount++;
       try {
         const ai = new GoogleGenAI({ apiKey });
         const response = await ai.models.generateContent({
@@ -2332,6 +2355,7 @@ async function startServer() {
           lastGeminiTtsError = "respuesta sin audio";
           console.warn(`[TTS] Clave #${keyIdx + 1} sin audio (cuota agotada probablemente)`);
           sawQuota = true;
+          markKeyDead(geminiKeyDeadUntil, apiKey);
           continue;
         }
         workingKeyIdx = keyIdx;
@@ -2344,8 +2368,10 @@ async function startServer() {
         console.warn(`[TTS] Clave #${keyIdx + 1} falló:`, lastGeminiTtsError.slice(0, 200));
         if (/API_KEY_INVALID|API key not valid|401|403/.test(lastGeminiTtsError)) {
           sawReject = true;
+          markKeyDead(geminiKeyDeadUntil, apiKey);
         } else if (/RESOURCE_EXHAUSTED|429/.test(lastGeminiTtsError)) {
           sawQuota = true;
+          markKeyDead(geminiKeyDeadUntil, apiKey);
         }
       }
     }
@@ -2355,6 +2381,9 @@ async function startServer() {
     geminiKeysExhausted = sawQuota;
     if (sawQuota) {
       console.warn(`[TTS] ${geminiTtsKeys.length} clave(s) sin cuota disponible. ${sawReject ? "Algunas además inválidas." : ""}`);
+    }
+    if (aliveCount === 0) {
+      console.warn("[TTS] Todas las claves Gemini marcadas muertas: fallo rápido sin reintentos");
     }
     return null;
   }
@@ -2450,6 +2479,7 @@ async function startServer() {
       geminiTtsKeys = keys;
       workingKeyIdx = 0;
       geminiKeysExhausted = false;
+      geminiKeyDeadUntil.clear(); // claves nuevas: olvidar marcas de cuota agotada
       try {
         persistGeminiApiKeys(keys);
       } catch (err: any) {
@@ -2525,6 +2555,7 @@ async function startServer() {
       elevenLabsKeys = keys;
       workingElevenIdx = 0;
       elevenLabsQuotaExhausted = false;
+      elevenKeyDeadUntil.clear(); // claves nuevas: olvidar marcas de cuota agotada
       try {
         persistElevenLabsApiKeys(keys);
       } catch (err: any) {

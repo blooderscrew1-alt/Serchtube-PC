@@ -169,7 +169,9 @@ export async function synthesizeNeuralSpeech(text: string, options: NeuralSynthe
   if (cached) return cached;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15000);
+  // Gemini TTS tarda más en generar (varios segundos por llamada); darle margen
+  // de 30 s para que el botón de prueba no muera antes de llegar el audio
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? (engine === 'gemini' ? 30000 : 15000));
   // Cancelación cooperativa: si llega una orden más nueva, aborta el fetch
   const abortPoll = options.shouldAbort
     ? setInterval(() => { if (options.shouldAbort!()) controller.abort(); }, 250)
