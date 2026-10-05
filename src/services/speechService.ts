@@ -88,8 +88,25 @@ export interface WakeWordParseResult {
 const MUSICA_VARIANTS = new Set([
   'musica', 'música', 'music', 'músic', 'musik', 'musicas', 'músicas',
   'musi', 'músi', 'musico', 'músico', 'musca', 'mujica', 'misica', 'nusica',
-  'muica', 'muscia'
+  'muica', 'muscia', 'musicaa', 'músicaa', 'musika', 'muzika', 'musika',
+  'mussica', 'musica', 'mussika', 'musicá', 'musiká', 'músika', 'mucica',
+  'mucisa', 'musisa', 'musira', 'muusica', 'musiica', 'musicaa', 'musíca',
+  'musíka', 'musika', 'mhmusica', 'la musica', 'amusica'
 ]);
+
+/**
+ * ¿La palabra se parece suficiente a "musica" para considerarla la palabra de activación?
+ * Tolerancia adaptada al reconocimiento real de voz (2 errores si empieza con "mu", 1 si no).
+ */
+function fuzzyMatchMusica(w: string): boolean {
+  if (w.length < 4 || w.length > 9) return false;
+  const dist = levenshteinDistance(w, 'musica');
+  // Empieza con "mu" (lo más estable del audio): se toleran hasta 2 deformaciones
+  if (w.startsWith('mu') && dist <= 2) return true;
+  // Sin prefijo estable: exigir casi exactitud
+  if (dist <= 1) return true;
+  return false;
+}
 
 /**
  * Verbos y órdenes musicales directas que activan la acción sin necesidad de gritar "música"
@@ -111,8 +128,11 @@ export function parseWakeWord(transcript: string, wakeWord: string = "música"):
     return { hasWakeWord: false, commandText: '', isWakeWordOnly: false };
   }
 
-  // 1. Verificación directa de la palabra clave configurada
-  let wakeWordIndex = normTranscript.indexOf(normWakeWord);
+  // 1. Verificación directa de la palabra clave configurada (con límites de palabra:
+  // "musicaa" debe tratarse como variante completa, no como "musica" + "a")
+  const boundaryRegex = new RegExp(`(?:^|\\s)${normWakeWord}(?=\\s|$)`);
+  const boundaryMatch = normTranscript.match(boundaryRegex);
+  let wakeWordIndex = boundaryMatch ? boundaryMatch.index + boundaryMatch[0].indexOf(normWakeWord) : -1;
   let matchedLength = normWakeWord.length;
   let matchedKeyword = normWakeWord;
 
@@ -134,8 +154,22 @@ export function parseWakeWord(transcript: string, wakeWord: string = "música"):
         break;
       }
 
-      // Tolerancia por distancia Levenshtein <= 1 para palabras de longitud similar
-      if (w.length >= 4 && w.length <= 7 && levenshteinDistance(w, 'musica') <= 1) {
+      // Palabra cortada por el motor: "mu sica", "mu si ca" -> unir con las siguientes
+      let joined = w;
+      for (let k = i + 1; k < Math.min(i + 3, words.length); k++) {
+        joined += words[k];
+        if (MUSICA_VARIANTS.has(joined) || fuzzyMatchMusica(joined)) {
+          const joinedEnd = normTranscript.indexOf(words[k], cumulativeOffset) + words[k].length;
+          wakeWordIndex = wordIdx;
+          matchedLength = joinedEnd - wordIdx;
+          matchedKeyword = joined;
+          break;
+        }
+      }
+      if (wakeWordIndex !== -1) break;
+
+      // Tolerancia fonética amplia adaptada a voz real
+      if (fuzzyMatchMusica(w)) {
         wakeWordIndex = wordIdx;
         matchedLength = w.length;
         matchedKeyword = w;
@@ -236,6 +270,14 @@ export class SpeechService {
   private onTranscriptCallback?: (transcript: string, isFinal: boolean) => void;
   private onStatusChangeCallback?: (status: 'listening' | 'idle' | 'speaking' | 'processing' | 'error') => void;
   private isProcessingCommand = false;
+  /** Cola final pendiente dentro de la misma sesión de reconocimiento (une frases cortadas) */
+  private finalTail = '';
+  /**
+   * Micrófono caliente: cuando el asistente acaba de detectar la palabra de activación
+   * y espera el comando del usuario, la escucha NO se bloquea aunque el TTS esté hablando
+   * (el saludo de bienvenida ya no se come la orden que viene detrás).
+   */
+  private awaitingCommand = false;
 
   private constructor() {
     this.initRecognition();
@@ -354,16 +396,19 @@ export class SpeechService {
         this.recognition = new SpeechRecognitionClass();
         this.recognition.continuous = true;
         this.recognition.interimResults = true;
-        this.recognition.maxAlternatives = 1;
-        
-        // Detección automática de dialecto español del usuario
+        // Varias interpretaciones por frase: clave para rescatar la palabra de activación
+        // cuando el motor la transcribe mal ("musika", "mujica", "mu sica"...)
+        this.recognition.maxAlternatives = 5;
+
+        // Dialecto español: priorizar es-MX si el navegador no reporta uno concreto
         const userLang = (typeof navigator !== 'undefined' && navigator.language && navigator.language.startsWith('es'))
           ? navigator.language
-          : 'es-ES';
+          : 'es-MX';
         this.recognition.lang = userLang;
 
         this.recognition.onstart = () => {
           this.isListening = true;
+          this.finalTail = '';
           if (this.config.wakeWordEnabled === false) {
             this.onStatusChangeCallback?.('listening');
           }
@@ -379,48 +424,77 @@ export class SpeechService {
           // 🛡️ INMUNIDAD ACÚSTICA CONTRA LA PROPIA VOZ DEL ASISTENTE (TTS Echo Suppression)
           // Descartar de raíz cualquier sonido si el asistente está hablando por síntesis de voz,
           // si está procesando una orden, o si estamos en la ventana de enfriamiento post-respuesta.
+          // EXCEPCIÓN: si el micrófono está "caliente" (esperando comando tras la palabra clave),
+          // la escucha continúa aunque el saludo del TTS siga sonando.
           const isTtsActive =
             this.isSynthesizing ||
             (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking) ||
             now < this.ttsGuardUntil;
 
-          if (this.isProcessingCommand || now < this.commandCooldownUntil || isTtsActive) {
+          if (this.isProcessingCommand || (!this.awaitingCommand && (now < this.commandCooldownUntil || isTtsActive))) {
             return;
           }
 
           let interimTranscript = '';
           let finalTranscript = '';
+          // Alternativas del motor de reconocimiento (rescatan la palabra clave mal transcrita)
+          const alternatives: string[] = [];
 
           for (let i = event.resultIndex; i < event.results.length; ++i) {
             const result = event.results[i];
-            const text = result[0].transcript;
             if (result.isFinal) {
-              finalTranscript += text;
+              finalTranscript += result[0].transcript;
+              for (let j = 1; j < result.length; ++j) {
+                if (result[j] && result[j].transcript) alternatives.push(result[j].transcript);
+              }
             } else {
-              interimTranscript += text;
+              interimTranscript += result[0].transcript;
             }
           }
 
-          const candidate = (finalTranscript || interimTranscript).trim();
-          if (!candidate) return;
+          // Acumular la cola de frases finales dentro de la misma sesión:
+          // así "música" (final) + "eminem" (final, tras una pausa) se procesan JUNTOS
+          const accumulatedFinal = (this.finalTail + ' ' + finalTranscript).trim();
+          if (finalTranscript.trim()) {
+            this.finalTail = accumulatedFinal;
+          }
+
+          const rawCandidate = (accumulatedFinal || interimTranscript).trim();
+          if (!rawCandidate) return;
+
+          let candidate = rawCandidate;
+
+          // 🔁 Rescate por alternativas: si la interpretación principal no contiene la palabra
+          // de activación pero una alternativa sí, usar esa alternativa como transcripción.
+          if (this.config.wakeWordEnabled !== false && alternatives.length > 0) {
+            const mainHit = parseWakeWord(candidate, this.config.wakeWord || 'música').hasWakeWord;
+            if (!mainHit) {
+              for (const alt of alternatives) {
+                if (parseWakeWord(alt, this.config.wakeWord || 'música').hasWakeWord) {
+                  console.log(`[SpeechService] 🔁 Alternativa rescatada: "${alt}" (principal: "${candidate}")`);
+                  candidate = alt.trim();
+                  break;
+                }
+              }
+            }
+          }
 
           // 🛡️ Filtro Semántico Antirruido de Eco:
           // Si el audio capturado coincide con la frase que el asistente acaba de decir
-          if (this.lastSpokenText && now - this.lastSpokenTimestamp < 6000) {
-            const normCandidate = normalizeText(candidate);
-            const normLastSpoken = normalizeText(this.lastSpokenText);
-            if (
-              normCandidate &&
-              (normLastSpoken.includes(normCandidate) || normCandidate.includes(normLastSpoken))
-            ) {
-              console.log(`[SpeechService] 🔇 Eco de voz del asistente suprimido en micrófono: "${candidate}"`);
-              return;
-            }
+          const normCandidate = normalizeText(candidate);
+          const normLastSpoken = normalizeText(this.lastSpokenText || '');
+          if (
+            this.lastSpokenText && now - this.lastSpokenTimestamp < 6000 &&
+            normCandidate &&
+            (normLastSpoken.includes(normCandidate) || normCandidate.includes(normLastSpoken))
+          ) {
+            console.log(`[SpeechService] 🔇 Eco de voz del asistente suprimido en micrófono: "${candidate}"`);
+            return;
           }
 
-          if (finalTranscript.trim()) {
-            console.log("[SpeechService] 🎙️ Final:", finalTranscript.trim());
-            this.onTranscriptCallback?.(finalTranscript.trim(), true);
+          if (accumulatedFinal.trim()) {
+            console.log("[SpeechService] 🎙️ Final:", accumulatedFinal.trim());
+            this.onTranscriptCallback?.(accumulatedFinal.trim(), true);
           } else if (interimTranscript.trim()) {
             this.onTranscriptCallback?.(interimTranscript.trim(), false);
           }
@@ -436,17 +510,20 @@ export class SpeechService {
 
         this.recognition.onend = () => {
           this.isListening = false;
-          // Auto-restart continuous listening gracefully
+          // Auto-restart continuo y robusto: reintenta hasta 3 veces con retroceso,
+          // porque Chrome/Edge corta la sesión de reconocimiento con frecuencia.
           if (this.config.continuousListening && !this.isProcessingCommand && !this.config.satelliteMicOnly) {
-            setTimeout(() => {
-              if (this.config.continuousListening && !this.isListening && !this.isProcessingCommand && !this.config.satelliteMicOnly) {
-                try {
-                  this.recognition.start();
-                } catch (e) {
-                  // already started or busy
-                }
+            let attempts = 0;
+            const tryRestart = () => {
+              if (!this.config.continuousListening || this.isListening || this.isProcessingCommand || this.config.satelliteMicOnly) return;
+              attempts++;
+              try {
+                this.recognition.start();
+              } catch (e) {
+                if (attempts < 3) setTimeout(tryRestart, 250 * attempts);
               }
-            }, 200);
+            };
+            setTimeout(tryRestart, 250);
           } else if (!this.isProcessingCommand) {
             this.onStatusChangeCallback?.('idle');
           }
@@ -563,6 +640,15 @@ export class SpeechService {
 
   public getIsProcessingCommand(): boolean {
     return this.isProcessingCommand;
+  }
+
+  /**
+   * Marca que la palabra de activación fue detectada y se espera un comando.
+   * Mientras esté activa, el micrófono permanece abierto aunque el saludo del
+   * asistente (TTS) siga sonando, de modo que "música ... eminem" con pausa no se pierda.
+   */
+  public setAwaitingCommand(awaiting: boolean) {
+    this.awaitingCommand = awaiting;
   }
 
   public resetSession() {

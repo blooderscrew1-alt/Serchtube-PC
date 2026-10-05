@@ -474,6 +474,14 @@ export default function App() {
   isAwaitingCommandRef.current = isAwaitingCommandAfterWakeWord;
   // Inmunidad acústica de micrófono: evita que la música que empieza a sonar por los altavoces dispare comandos falsos
   const playbackCooldownUntilRef = useRef<number>(0);
+  // Saludo de bienvenida diferido: se cancela si el comando llega justo detrás de la palabra clave
+  const pendingGreetingTimerRef = useRef<any>(null);
+
+  // Sincronizar el "micrófono caliente" con el servicio de voz: mientras se espera un
+  // comando tras la palabra clave, la escucha no se bloquea por el saludo del TTS
+  useEffect(() => {
+    SpeechService.getInstance().setAwaitingCommand(isAwaitingCommandAfterWakeWord);
+  }, [isAwaitingCommandAfterWakeWord]);
 
   // 🛡️ Ventana de 3 Segundos / Arbitraje Global:
   // Si se reciben más de una solicitud en menos de 3 segundos, solo se acepta la primera
@@ -1257,6 +1265,7 @@ export default function App() {
           /^(música|musica)\s+(cancelar|cancela|olvidalo|olvídalo|nada)$/i.test(norm);
 
         if ((isAwaitingCommandRef.current || isDirectMicActiveRef.current) && isCancelPhrase) {
+          if (pendingGreetingTimerRef.current) { clearTimeout(pendingGreetingTimerRef.current); pendingGreetingTimerRef.current = null; }
           if (activeListeningTimerRef.current) clearTimeout(activeListeningTimerRef.current);
           setIsAwaitingCommandAfterWakeWord(false);
           isAwaitingCommandRef.current = false;
@@ -1299,6 +1308,8 @@ export default function App() {
           setIsAwaitingCommandAfterWakeWord(false);
           isAwaitingCommandRef.current = false;
           setSystemStatus('processing');
+          // Un comando real llegó: cancelar cualquier saludo de bienvenida pendiente
+          if (pendingGreetingTimerRef.current) { clearTimeout(pendingGreetingTimerRef.current); pendingGreetingTimerRef.current = null; }
           SpeechService.getInstance().setCommandCooldown(3000);
           playbackCooldownUntilRef.current = Date.now() + 3000;
           SpeechService.getInstance().resetSession();
@@ -1356,7 +1367,15 @@ export default function App() {
               const options = WAKE_GREETINGS[personality] || WAKE_GREETINGS.animada || WAKE_GREETINGS.directa;
               const greeting = options[Math.floor(Math.random() * options.length)];
 
-              SpeechService.getInstance().speak(greeting);
+              // Saludo DIFERIDO: si el comando llega enseguida ("música ... eminem" con pausa),
+              // se cancela el saludo y se ejecuta directo, sin que el TTS tape el micrófono
+              if (pendingGreetingTimerRef.current) clearTimeout(pendingGreetingTimerRef.current);
+              pendingGreetingTimerRef.current = setTimeout(() => {
+                pendingGreetingTimerRef.current = null;
+                if (isAwaitingCommandRef.current) {
+                  SpeechService.getInstance().speak(greeting);
+                }
+              }, 1400);
 
               // Establish strict 5-second frame to capture request or auto-cancel on inactivity
               if (activeListeningTimerRef.current) clearTimeout(activeListeningTimerRef.current);
@@ -1412,6 +1431,8 @@ export default function App() {
           }
         } else {
           // Wake word disabled -> Process all speech directly
+          // Un comando real llegó: cancelar cualquier saludo de bienvenida pendiente
+          if (pendingGreetingTimerRef.current) { clearTimeout(pendingGreetingTimerRef.current); pendingGreetingTimerRef.current = null; }
           SpeechService.getInstance().setCommandCooldown(3000);
           playbackCooldownUntilRef.current = Date.now() + 3000;
           SpeechService.getInstance().resetSession();
