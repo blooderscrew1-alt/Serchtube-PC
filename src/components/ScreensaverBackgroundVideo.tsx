@@ -38,6 +38,7 @@ const ScreensaverBackgroundVideoComponent: React.FC<ScreensaverBackgroundVideoPr
   const initialLoadTimeRef = useRef<number>(Date.now());
   const heartbeatIntervalRef = useRef<any>(null);
   const hasAppliedInitialQualityRef = useRef<boolean>(false);
+  const stallReloadCountRef = useRef<number>(0); // recargas por congelamiento: a la 2ª bajamos resolución
 
   // Map quality to YouTube internal quality name
   const ytQualityName =
@@ -67,7 +68,9 @@ const ScreensaverBackgroundVideoComponent: React.FC<ScreensaverBackgroundVideoPr
       params.set('origin', originStr);
       params.set('widget_referrer', originStr);
     }
-    return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+    // youtube-nocookie.com: mismo reproductor pero sin rastreo extra; reduce las
+    // comprobaciones anti-bot y las pausas de "¿continuar viendo?" que congelan el embed.
+    return `https://www.youtube-nocookie.com/embed/${videoId}?${params.toString()}`;
   }, [videoId, isMuted, isInteractiveMode, originStr]);
 
   // PostMessage helper to command YouTube iframe safely
@@ -106,10 +109,11 @@ const ScreensaverBackgroundVideoComponent: React.FC<ScreensaverBackgroundVideoPr
   }, [sendYtCommand]);
 
   // Set video quality ONLY on deliberate user change or initial start (never repeatedly!)
+  // En 'auto' pedimos 360p ('medium'): para un fondo atenuado es más que suficiente y
+  // reduce drásticamente el buffering y el consumo de CPU/GPU en PCs modestas.
   const applyQualityOnce = useCallback(() => {
-    if (quality && quality !== 'auto') {
-      sendYtCommand('setPlaybackQuality', ytQualityName);
-    }
+    const target = quality && quality !== 'auto' ? ytQualityName : 'medium';
+    sendYtCommand('setPlaybackQuality', target);
   }, [quality, sendYtCommand, ytQualityName]);
 
   // Listen to YouTube postMessage events for actual state & progress delivery
@@ -125,6 +129,10 @@ const ScreensaverBackgroundVideoComponent: React.FC<ScreensaverBackgroundVideoPr
           if (!hasAppliedInitialQualityRef.current) {
             hasAppliedInitialQualityRef.current = true;
             applyQualityOnce();
+          }
+          // Tras recargas por congelamiento, pedir 240p para que la red lo sostenga
+          if (stallReloadCountRef.current >= 2) {
+            sendYtCommand('setPlaybackQuality', 'small');
           }
           sendYtCommand('playVideo');
           return;
@@ -215,13 +223,13 @@ const ScreensaverBackgroundVideoComponent: React.FC<ScreensaverBackgroundVideoPr
       const elapsedSinceLoad = (now - initialLoadTimeRef.current) / 1000;
       const timeSinceRealMovement = (now - lastRealMovementTimeRef.current) / 1000;
 
-      // Allow 8 seconds grace period on initial load
-      if (elapsedSinceLoad < 8) {
+      // Allow 10 seconds grace period on initial load (redes lentas necesitan más margen)
+      if (elapsedSinceLoad < 10) {
         return;
       }
 
-      // If the video has truly not advanced for more than 8 seconds
-      if (timeSinceRealMovement > 8) {
+      // If the video has truly not advanced for more than 10 seconds
+      if (timeSinceRealMovement > 10) {
         setIsBufferingStalled(true);
         setStalledSeconds(Math.floor(timeSinceRealMovement));
         onVideoStatusChange?.('stalled');
@@ -229,17 +237,19 @@ const ScreensaverBackgroundVideoComponent: React.FC<ScreensaverBackgroundVideoPr
         // Step 1: Soft resume (DO NOT reset quality or buffer!)
         resumePlaybackSmooth();
 
-        // Step 2: If stuck for more than 16 seconds, try a micro-seek to unblock player pipe
-        if (timeSinceRealMovement > 16 && timeSinceRealMovement < 28) {
+        // Step 2: If stuck for more than 20 seconds, try a micro-seek to unblock player pipe
+        if (timeSinceRealMovement > 20 && timeSinceRealMovement < 40) {
           if (lastCurrentTimeRef.current > 0) {
             sendYtCommand('seekTo', [lastCurrentTimeRef.current + 0.2, true]);
           }
           sendYtCommand('playVideo');
         }
 
-        // Step 3: ONLY after 28 continuous seconds of dead silence and zero frame progress, soft reload
-        if (timeSinceRealMovement > 28) {
-          console.warn('[Screensaver Background Video] ⚡ Video congelado confirmado (>28s sin avance). Auto-recuperando...');
+        // Step 3: ONLY after 40 continuous seconds of dead silence and zero frame progress, soft reload
+        // (antes eran 28s: con conexiones lentas se creaba un bucle de recargas cada pocos segundos)
+        if (timeSinceRealMovement > 40) {
+          stallReloadCountRef.current += 1;
+          console.warn('[Screensaver Background Video] ⚡ Video congelado confirmado (>40s sin avance). Auto-recuperando...');
           setInternalReloadKey(k => k + 1);
           lastRealMovementTimeRef.current = Date.now();
           initialLoadTimeRef.current = Date.now();
