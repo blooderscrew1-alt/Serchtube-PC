@@ -278,6 +278,15 @@ export class SpeechService {
    * (el saludo de bienvenida ya no se come la orden que viene detrás).
    */
   private awaitingCommand = false;
+  /**
+   * Watchdog de arranque: al encender la PC, Windows/Edge aún no tienen listos los
+   * micrófonos cuando la app arranca (el reconocimiento falla con 'audio-capture' en
+   * silencio). Se reintenta cada 3 s hasta 100 veces y además se reacciona al evento
+   * 'devicechange' cuando los micrófonos por fin aparecen.
+   */
+  private micRetryTimer: any = null;
+  private micRetryAttempts = 0;
+  private deviceChangeListenerAttached = false;
 
   private constructor() {
     this.initRecognition();
@@ -409,6 +418,8 @@ export class SpeechService {
         this.recognition.onstart = () => {
           this.isListening = true;
           this.finalTail = '';
+          this.micRetryAttempts = 0;
+          if (this.micRetryTimer) { clearTimeout(this.micRetryTimer); this.micRetryTimer = null; }
           if (this.config.wakeWordEnabled === false) {
             this.onStatusChangeCallback?.('listening');
           }
@@ -505,6 +516,11 @@ export class SpeechService {
           if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
             this.isListening = false;
             this.onStatusChangeCallback?.('error');
+          }
+          // 'audio-capture' (y también permisos fallidos al arrancar la PC): los micrófonos
+          // aún no están listos -> programar reintentos en vez de quedarse muerto
+          if (event.error === 'audio-capture' || event.error === 'service-not-allowed' || event.error === 'not-allowed') {
+            this.scheduleMicRetry();
           }
         };
 
@@ -696,22 +712,69 @@ export class SpeechService {
     this.onStatusChangeCallback = onStatusChange;
   }
 
+  /**
+   * Reintento periódico de arranque del micrófono (para el inicio de Windows,
+   * cuando los dispositivos de audio tardan en aparecer).
+   */
+  private scheduleMicRetry() {
+    if (this.micRetryTimer) return;
+    this.micRetryAttempts++;
+    if (this.micRetryAttempts > 100) {
+      console.warn('[SpeechService] ⚠️ Watchdog de micrófono agotado (5 min). Usa devicechange o reinicia la escucha.');
+      return;
+    }
+    this.micRetryTimer = setTimeout(() => {
+      this.micRetryTimer = null;
+      if (!this.config.continuousListening || this.isListening || this.isProcessingCommand || this.config.satelliteMicOnly) return;
+      console.log(`[SpeechService] 🔄 Reintento de micrófono #${this.micRetryAttempts}...`);
+      this.startListening();
+    }, 3000);
+  }
+
+  /**
+   * Escucha conexiones/desconexiones de micrófonos: si los dispositivos aparecen
+   * tarde (inicio de la PC), la escucha se reactiva sola sin tocar nada.
+   */
+  private ensureDeviceChangeListener() {
+    if (this.deviceChangeListenerAttached) return;
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.addEventListener) return;
+    this.deviceChangeListenerAttached = true;
+    navigator.mediaDevices.addEventListener('devicechange', () => {
+      console.log('[SpeechService] 🔌 Cambio en dispositivos de audio detectado');
+      if (this.config.continuousListening && !this.isListening && !this.isProcessingCommand && !this.config.satelliteMicOnly) {
+        this.micRetryAttempts = 0;
+        this.startListening();
+      }
+    });
+  }
+
   public startListening() {
     if (this.config.satelliteMicOnly) return;
     if (!this.recognition) {
       this.initRecognition();
     }
     if (!this.recognition) return;
+    this.ensureDeviceChangeListener();
     try {
       this.config.continuousListening = true;
       this.recognition.start();
     } catch (e) {
       // Ignored if already started
     }
+    // Verificación post-arranque: si en 4 s no hay sesión activa, programar reintento
+    // (cubre el caso de arranque de la PC donde start() no dispara error visible)
+    if (!this.micRetryTimer && this.micRetryAttempts === 0) {
+      setTimeout(() => {
+        if (this.config.continuousListening && !this.isListening && !this.isProcessingCommand && !this.config.satelliteMicOnly) {
+          this.scheduleMicRetry();
+        }
+      }, 4000);
+    }
   }
 
   public stopListening() {
     this.config.continuousListening = false;
+    if (this.micRetryTimer) { clearTimeout(this.micRetryTimer); this.micRetryTimer = null; }
     this.releaseMicHardwareFocus();
     if (this.recognition) {
       try {
