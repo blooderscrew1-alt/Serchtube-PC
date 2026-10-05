@@ -129,10 +129,16 @@ function cachePut(key: string, blob: Blob) {
 // ---------------------------------------------------------------------------
 
 export interface NeuralSynthesisOptions {
-  /** Voz neuronal, ej: 'Puck' (por defecto Puck, alegre y animada) */
+  /** Motor neuronal: 'elevenlabs' (si hay voz configurada) o 'gemini' */
+  engine?: 'elevenlabs' | 'gemini';
+  /** Voz neuronal, ej: 'Puck' (Gemini) */
   voice?: string;
+  /** Voz de ElevenLabs (voice_id) */
+  elvoice?: string;
   /** Directiva de estilo (ver PERSONALITY_TTS_STYLES) */
   style?: string;
+  /** Multiplicador de velocidad (ElevenLabs; 1.0 = normal) */
+  speed?: number;
   /** Permite abortar una síntesis en curso (p.ej. llegó una orden más nueva) */
   shouldAbort?: () => boolean;
   /** Milisegundos máximos de espera (por defecto 15000) */
@@ -155,8 +161,10 @@ export async function synthesizeNeuralSpeech(text: string, options: NeuralSynthe
 
   const voice = options.voice || DEFAULT_NEURAL_VOICE;
   const style = options.style || '';
+  const engine = options.engine || 'gemini';
+  const elvoice = options.elvoice || '';
 
-  const key = cacheKey(voice, style, cleanText);
+  const key = cacheKey(`${engine}|${voice}|${elvoice}`, style, cleanText);
   const cached = audioCache.get(key);
   if (cached) return cached;
 
@@ -168,8 +176,10 @@ export async function synthesizeNeuralSpeech(text: string, options: NeuralSynthe
     : null;
 
   try {
-    const params = new URLSearchParams({ text: cleanText, voice });
+    const params = new URLSearchParams({ text: cleanText, voice, engine });
     if (style) params.set('style', style);
+    if (elvoice) params.set('elvoice', elvoice);
+    if (options.speed && options.speed !== 1) params.set('speed', String(options.speed));
 
     const res = await fetch(`/api/tts?${params.toString()}`, { signal: controller.signal });
     if (!res.ok) {

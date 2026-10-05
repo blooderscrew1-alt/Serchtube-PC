@@ -16,6 +16,8 @@ export interface SpeechConfig {
   ttsEngine?: 'neural' | 'browser';
   /** Voz neuronal seleccionada, ej: 'es-MX-JorgeNeural' */
   neuralVoice?: string;
+  /** Voice ID de ElevenLabs seleccionado (prioridad sobre Gemini) */
+  elevenVoice?: string;
   speechRate: number;
   speechPitch: number;
   speechVolume?: number;
@@ -718,13 +720,15 @@ export class SpeechService {
 
     const shouldAbort = () => callId !== this.ttsSeq;
 
+    // Si hay voz de ElevenLabs configurada, es el motor preferente (Gemini queda de respaldo en el servidor)
+    const useEleven = !!this.config.elevenVoice;
+
     let blob: Blob;
     try {
-      blob = await synthesizeNeuralSpeech(sanitized, {
-        voice,
-        style,
-        shouldAbort
-      });
+      blob = await synthesizeNeuralSpeech(sanitized, useEleven
+        ? { engine: 'elevenlabs', elvoice: this.config.elevenVoice, speed: finalRate, shouldAbort }
+        : { engine: 'gemini', voice, style, shouldAbort }
+      );
     } catch (err) {
       if (!shouldAbort()) {
         console.warn('[SpeechService] Voz neuronal no disponible, usando voz del navegador:', err);

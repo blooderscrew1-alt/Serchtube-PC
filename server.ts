@@ -2145,6 +2145,61 @@ async function startServer() {
   }
   const GEMINI_TTS_MODELS = ["gemini-2.5-flash-preview-tts"];
 
+  // ═══ ElevenLabs: voces ultra-realistas (plan gratuito ~10.000 caracteres/mes) ═══
+  let elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || "";
+  const ELEVEN_TTS_MODEL = "eleven_multilingual_v2"; // la más realista, español nativo
+
+  function persistElevenLabsApiKey(key: string) {
+    const envPath = path.join(process.cwd(), ".env");
+    let content = "";
+    try {
+      content = fs.readFileSync(envPath, "utf8");
+    } catch (_) {}
+    const line = `ELEVENLABS_API_KEY="${key}"`;
+    if (/^ELEVENLABS_API_KEY=.*$/m.test(content)) {
+      content = content.replace(/^ELEVENLABS_API_KEY=.*$/m, line);
+    } else {
+      content = content.replace(/\s*$/, "") + (content.trim() ? "\n" : "") + line + "\n";
+    }
+    fs.writeFileSync(envPath, content, "utf8");
+  }
+
+  let lastElevenError = "";
+
+  async function synthesizeWithElevenLabs(text: string, voiceId: string, speed = 1): Promise<{ body: Buffer; contentType: string } | null> {
+    if (!elevenLabsApiKey || !voiceId) return null;
+    lastElevenError = "";
+    try {
+      const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+        method: "POST",
+        headers: {
+          "xi-api-key": elevenLabsApiKey,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          text,
+          model_id: ELEVEN_TTS_MODEL,
+          voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true, speed }
+        })
+      });
+      if (!res.ok) {
+        lastElevenError = `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
+        console.warn("[TTS-ElevenLabs] Fallo:", lastElevenError);
+        return null;
+      }
+      const body = Buffer.from(await res.arrayBuffer());
+      if (body.length < 100) {
+        lastElevenError = "respuesta sin audio";
+        return null;
+      }
+      return { body, contentType: "audio/mpeg" };
+    } catch (err: any) {
+      lastElevenError = err?.message || "error de red";
+      console.warn("[TTS-ElevenLabs] Error:", lastElevenError);
+      return null;
+    }
+  }
+
   const ttsAudioCache = new Map<string, { body: Buffer; contentType: string }>();
   const TTS_CACHE_MAX = 96;
 
@@ -2266,23 +2321,39 @@ async function startServer() {
       const text = String(req.query.text || "").replace(/\s+/g, " ").trim().slice(0, 600);
       const voice = String(req.query.voice || "Puck");
       const style = String(req.query.style || "").slice(0, 220);
+      const engine = String(req.query.engine || "");           // 'elevenlabs' | 'gemini' | '' (auto)
+      const elvoice = String(req.query.elvoice || "");         // voice_id de ElevenLabs
+      const speed = Math.max(0.7, Math.min(1.2, parseFloat(String(req.query.speed || "1")) || 1));
       if (!text) return res.status(400).json({ error: "Falta el parámetro text" });
 
-      const cacheKey = `${voice}|${style}|${text}`;
+      const cacheKey = `${engine}|${voice}|${elvoice}|${speed}|${style}|${text}`;
       const cached = ttsAudioCache.get(cacheKey);
       if (cached) {
         res.set({ "Content-Type": cached.contentType, "X-TTS-Cache": "hit" });
         return res.send(cached.body);
       }
 
-      let result = await synthesizeWithGemini(text, voice, style);
-      let provider = "gemini";
+      let result: { body: Buffer; contentType: string } | null = null;
+      let provider = "none";
 
-      if (!result && geminiTtsKeys.length > 0 && geminiKeysExhausted) {
-        // Todas las claves agotaron su cuota diaria: NO usar Google Translate.
+      // 1) ElevenLabs (si hay clave y voz elegida, o el motor lo pide explícito)
+      const wantsEleven = engine === "elevenlabs" || (!engine && elvoice && !!elevenLabsApiKey);
+      if (wantsEleven && elevenLabsApiKey && elvoice) {
+        result = await synthesizeWithElevenLabs(text, elvoice, speed);
+        provider = "elevenlabs";
+      }
+
+      // 2) Gemini TTS (respaldo: si ElevenLabs falló o no está configurado)
+      if (!result) {
+        result = await synthesizeWithGemini(text, voice, style);
+        provider = "gemini";
+      }
+
+      if (!result && ((geminiTtsKeys.length > 0 && geminiKeysExhausted) || engine === "elevenlabs")) {
+        // Cuotas agotadas (o motor ElevenLabs sin audio disponible): NO usar Google Translate.
         // Responder 503 para que el cliente use las voces locales del navegador.
         res.set("X-TTS-Provider", "browser-fallback");
-        return res.status(503).json({ error: "Cuota diaria de las claves neuronales agotada. Usando voces del navegador." });
+        return res.status(503).json({ error: "Cuota de voces neuronales agotada. Usando voces del navegador." });
       }
 
       if (!result) {
@@ -2377,6 +2448,74 @@ async function startServer() {
       });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Error guardando las claves" });
+    }
+  });
+
+  // Estado de la clave de ElevenLabs (enmascarada)
+  app.get("/api/eleven-key", (req, res) => {
+    const k = elevenLabsApiKey;
+    res.json({
+      configured: !!k,
+      masked: k ? `${k.slice(0, 5)}••••••${k.slice(-4)}` : ""
+    });
+  });
+
+  // Guarda la clave de ElevenLabs desde la UI y la valida contra su API
+  app.post("/api/eleven-key", async (req, res) => {
+    try {
+      const key = String(req.body?.key || "").trim().replace(/^["']|["']$/g, "");
+      if (!key) return res.status(400).json({ error: "Falta la clave" });
+      if (!key.startsWith("sk_")) return res.status(400).json({ error: "Las claves de ElevenLabs empiezan con sk_" });
+
+      // Validación real contra su API
+      const check = await fetch("https://api.elevenlabs.io/v1/user/subscription", {
+        headers: { "xi-api-key": key }
+      });
+      if (!check.ok) {
+        return res.status(400).json({ saved: false, valid: false, error: "ElevenLabs rechazó la clave (inválida o revocada)" });
+      }
+      const sub: any = await check.json();
+
+      elevenLabsApiKey = key;
+      try {
+        persistElevenLabsApiKey(key);
+      } catch (err: any) {
+        console.warn("[ElevenLabs-Key] No se pudo escribir el .env:", err?.message);
+      }
+
+      return res.json({
+        saved: true,
+        valid: true,
+        charactersRemaining: Math.max(0, (sub?.character_limit || 0) - (sub?.character_count || 0))
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Error validando la clave" });
+    }
+  });
+
+  // Lista de voces disponibles en la cuenta de ElevenLabs
+  app.get("/api/eleven-voices", async (req, res) => {
+    if (!elevenLabsApiKey) return res.status(400).json({ error: "Sin clave de ElevenLabs" });
+    try {
+      const r = await fetch("https://api.elevenlabs.io/v1/voices", {
+        headers: { "xi-api-key": elevenLabsApiKey }
+      });
+      if (!r.ok) return res.status(502).json({ error: "No se pudo consultar ElevenLabs" });
+      const data: any = await r.json();
+      // Solo voces "premade": son las usables con el plan gratuito vía API.
+      // Las "professional"/de librería responden 402 en el plan free.
+      const voices = (data.voices || [])
+        .filter((v: any) => v.category === "premade")
+        .map((v: any) => ({
+          id: v.voice_id,
+          name: v.name.replace(/ - .*/, ""),
+          accent: v.labels?.accent || "",
+          gender: v.labels?.gender || "",
+          category: v.category || ""
+        }));
+      return res.json({ voices });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Error listando voces" });
     }
   });
 

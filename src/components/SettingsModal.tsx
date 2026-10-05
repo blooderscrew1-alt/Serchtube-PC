@@ -324,6 +324,43 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
     return unsub;
   }, []);
 
+  const [elevenKeyInput, setElevenKeyInput] = useState<string>('');
+  const [elevenStatus, setElevenStatus] = useState<'idle' | 'saving' | 'ok' | 'invalid' | 'error'>('idle');
+  const [elevenInfo, setElevenInfo] = useState<{ configured: boolean; masked: string; charactersRemaining?: number } | null>(null);
+  const [elevenVoices, setElevenVoices] = useState<Array<{ id: string; name: string; accent: string; gender: string }>>([]);
+
+  useEffect(() => {
+    fetch('/api/eleven-key')
+      .then(r => r.json())
+      .then(info => {
+        setElevenInfo(info);
+        if (info?.configured) {
+          fetch('/api/eleven-voices').then(r => r.json()).then(d => setElevenVoices(d.voices || [])).catch(() => {});
+        }
+      })
+      .catch(() => setElevenInfo(null));
+  }, []);
+
+  const saveElevenKey = async () => {
+    if (!elevenKeyInput.trim()) return;
+    setElevenStatus('saving');
+    try {
+      const res = await fetch('/api/eleven-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: elevenKeyInput.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Error');
+      setElevenStatus('ok');
+      setElevenInfo({ configured: true, masked: `${elevenKeyInput.trim().slice(0, 5)}••••••${elevenKeyInput.trim().slice(-4)}`, charactersRemaining: data.charactersRemaining });
+      setElevenKeyInput('');
+      fetch('/api/eleven-voices').then(r => r.json()).then(d => setElevenVoices(d.voices || [])).catch(() => {});
+    } catch (err: any) {
+      setElevenStatus(err?.message?.includes('rechaz') ? 'invalid' : 'error');
+    }
+  };
+
   const saveGeminiApiKey = async () => {
     if (!apiKeyInput.trim()) return;
     setApiKeyStatus('saving');
@@ -1594,6 +1631,94 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                     <Play size={12} fill="currentColor" />
                     <span>{testingVoice === 'neural' ? 'Hablando...' : 'Probar'}</span>
                   </button>
+                </div>
+
+                {/* ElevenLabs: voces ultra-realistas */}
+                <div className="space-y-1.5 p-3 rounded-xl bg-amber-500/[0.06] border border-amber-500/25">
+                  <label className="text-xs text-gray-300 font-medium flex items-center justify-between">
+                    <span>🎙️ ElevenLabs (la voz más humana — prioridad máxima):</span>
+                    {elevenInfo && (
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono border ${
+                        elevenInfo.configured
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                          : 'bg-gray-500/20 text-gray-300 border-gray-500/30'
+                      }`}>
+                        {elevenInfo.configured ? `✓ ${elevenInfo.masked}${typeof elevenInfo.charactersRemaining === 'number' ? ` • ${elevenInfo.charactersRemaining.toLocaleString()} car. restantes` : ''}` : 'sin clave'}
+                      </span>
+                    )}
+                  </label>
+
+                  {elevenVoices.length > 0 ? (
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={speechConfig.elevenVoice || ''}
+                        onChange={(e) => onUpdateSpeechConfig({ elevenVoice: e.target.value || undefined })}
+                        className="flex-1 bg-black/80 border border-amber-500/30 rounded-xl px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none cursor-pointer truncate"
+                      >
+                        <option value="">— No usar ElevenLabs (usar Gemini) —</option>
+                        {elevenVoices.map(v => (
+                          <option key={v.id} value={v.id}>
+                            {v.name} {v.accent ? `(${v.accent}${v.gender ? ', ' + v.gender : ''})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!speechConfig.elevenVoice) return;
+                          setTestingVoice('neural');
+                          const speechService = SpeechService.getInstance();
+                          speechService.updateConfig({ ...speechConfig, ttsEngine: 'neural' });
+                          speechService.speak("Hola, así suena mi voz con ElevenLabs. Reproduciendo tus canciones favoritas.");
+                          setTimeout(() => setTestingVoice(null), 8000);
+                        }}
+                        disabled={!speechConfig.elevenVoice}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed bg-amber-600/25 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40"
+                      >
+                        <Play size={12} fill="currentColor" />
+                        <span>Probar</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="password"
+                        value={elevenKeyInput}
+                        onChange={(e) => { setElevenKeyInput(e.target.value); setElevenStatus('idle'); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') saveElevenKey(); }}
+                        placeholder="Pega tu clave sk_... (elevenlabs.io → perfil → API Keys)"
+                        autoComplete="off"
+                        className="flex-1 bg-black/80 border border-white/20 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-amber-500 focus:outline-none placeholder:text-gray-500 placeholder:font-sans"
+                      />
+                      <button
+                        type="button"
+                        onClick={saveElevenKey}
+                        disabled={!elevenKeyInput.trim() || elevenStatus === 'saving'}
+                        className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex-shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
+                          elevenStatus === 'ok'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-amber-600/25 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40'
+                        }`}
+                      >
+                        <Check size={12} />
+                        <span>{elevenStatus === 'saving' ? 'Validando...' : elevenStatus === 'ok' ? 'Guardada' : 'Guardar'}</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {elevenStatus === 'ok' && (
+                    <p className="text-[10px] text-emerald-300">✓ Clave validada. Ahora elige tu voz en el selector que apareció arriba.</p>
+                  )}
+                  {elevenStatus === 'invalid' && (
+                    <p className="text-[10px] text-amber-300">⚠ ElevenLabs rechazó la clave. Debe empezar por sk_ y estar activa (revísala en elevenlabs.io → API Keys).</p>
+                  )}
+                  {elevenStatus === 'error' && (
+                    <p className="text-[10px] text-red-300">✗ No se pudo contactar al servidor para guardar la clave.</p>
+                  )}
+
+                  <p className="text-[10px] text-gray-400 leading-relaxed">
+                    Cuenta gratis en <strong className="text-gray-300">elevenlabs.io</strong>: ~10.000 caracteres/mes (cientos de respuestas). Si se agota o falla, el asistente cae solo a Gemini y luego a las voces del navegador. Puedes alternar entre ElevenLabs y Gemini con el selector.
+                  </p>
                 </div>
 
                 {/* Claves de API personales (Gemini) sin tocar el .env */}
