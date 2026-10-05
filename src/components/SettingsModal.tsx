@@ -516,6 +516,14 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
     }
   };
 
+  // Refrescar la lista de micrófonos automáticamente al conectar/desconectar uno
+  React.useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.addEventListener) return;
+    const onChange = () => loadAudioInputDevices();
+    navigator.mediaDevices.addEventListener('devicechange', onChange);
+    return () => navigator.mediaDevices.removeEventListener('devicechange', onChange);
+  }, []);
+
   const handleRequestMicPermissionAndRefresh = async () => {
     const res = await SpeechService.getInstance().requestMicPermission(speechConfig.audioInputDeviceId);
     if (res.granted) {
@@ -1379,6 +1387,19 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                   })}
                 </select>
               </div>
+
+              {/* Aviso honesto: la Web Speech API del navegador siempre escucha el micrófono
+                  predeterminado de Windows; la mezcla multi-mic solo aplica al vúmetro/prueba */}
+              {(speechConfig.audioInputDeviceId === 'all' || (speechConfig.audioInputDeviceId && speechConfig.audioInputDeviceId !== 'default')) && (
+                <div className="p-2.5 rounded-lg bg-sky-950/30 border border-sky-500/30 text-[11px] text-sky-200 animate-fadeIn">
+                  <span className="font-bold block mb-0.5">ℹ️ Cómo escucha de verdad el asistente</span>
+                  El motor de voz del navegador siempre escucha el <b>micrófono predeterminado de Windows</b> (limitación del navegador, no de SerchTube).
+                  {speechConfig.audioInputDeviceId === 'all'
+                    ? ' La opción "Todos" mezcla los micrófonos solo para el vúmetro y las pruebas de esta pantalla.'
+                    : ' Para que el asistente escuche el micrófono elegido, configúralo como predeterminado en Windows: Configuración → Sistema → Sonido → Entrada.'}
+                  {' '}Conecta tus micrófonos y usa aquí el que dejes como predeterminado.
+                </div>
+              )}
 
               {/* Multi-Mic Python Script Helper Banner */}
               <div className="p-3 rounded-xl bg-gradient-to-r from-red-950/40 via-neutral-900 to-black border border-red-500/30 flex items-center justify-between gap-3 my-2">
