@@ -187,6 +187,7 @@ class Mic:
         self.level = 0.0          # pico acumulado entre refrescos del medidor
         self.last_cb = 0.0        # última vez que llegó audio del dispositivo
         self.heard_at = 0.0       # última vez que hubo señal audible
+        self.retry_at = 0.0       # próxima ventana de reinicio automático (watchdog)
         self.hold = 0.0           # marcador de pico del medidor
         self.listening = False    # ¿se envía a las bocinas?
         self.ratio = 1.0
@@ -381,6 +382,7 @@ class App(tk.Tk):
         self.out_devs = []      # (índice, nombre)
         self.out_var = tk.StringVar()
         self.cfg = load_config()
+        self._boot_retries = 0
         self._save_job = None
         self.startup_var = tk.BooleanVar(value=startup_enabled())
         self.min_var = tk.BooleanVar(value=bool(self.cfg.get("minimized", False)))
@@ -946,6 +948,43 @@ class App(tk.Tk):
             msg = ("VB-Cable NO está instalado todavía.\n\n" + pasos)
             messagebox.showinfo("Guía Asistente", msg)
 
+    # ---------- Watchdog de dispositivos (arranque de Windows) ----------
+    def _watchdog_restart(self, mic: Mic):
+        """Al encender la PC los streams a veces quedan zombis (abiertos pero sin
+        datos). Reabrir el mic y, si estaba sonando, también la salida."""
+        now = time.time()
+        if now < mic.retry_at:
+            return
+        mic.retry_at = now + 6.0  # máximo un intento cada 6 segundos por micro
+        was_listening = mic.listening
+        try:
+            mic.stop()
+        except Exception:
+            pass
+        # quitarlo de la lista de escucha para no duplicarlo al reactivarlo
+        self.listen_mics = [m for m in self.listen_mics if m is not mic]
+        try:
+            mic.start(self.out_rate)
+            mic.last_cb = time.time()
+            if was_listening or self.listen_mics:
+                # resincronizar la salida: cerrarla y volverla a abrir
+                if self.out_stream:
+                    try:
+                        self.out_stream.stop()
+                        self.out_stream.close()
+                    except Exception:
+                        pass
+                    self.out_stream = None
+                if was_listening:
+                    mic.listening = True
+                    if mic not in self.listen_mics:
+                        self.listen_mics = self.listen_mics + [mic]
+                    mic.ring.clear()
+                    self._ensure_output()
+            print(f"[Watchdog] Mic reiniciado: {mic.name}")
+        except Exception as e:
+            print(f"[Watchdog] Fallo al reiniciar {mic.name}: {e}")
+
     # ---------- Diagnóstico ----------
     def show_diag(self):
         try:
@@ -1001,8 +1040,9 @@ class App(tk.Tk):
             meter.coords(row["hold"], hx, 0, hx, METER_H)
             row["db"].config(text=txt)
 
-            if now - m.last_cb > 1.0:
-                self._set_status(row, "⚠ Sin datos del dispositivo", COL["red"])
+            if now - m.last_cb > 3.0:
+                self._set_status(row, "⚠ Sin datos: reiniciando automáticamente...", COL["red"])
+                self._watchdog_restart(m)
             elif now - m.heard_at < 3.0:
                 self._set_status(row, "● Señal detectada", COL["green"])
             else:
