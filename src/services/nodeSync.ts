@@ -12,6 +12,7 @@ export class NodeSyncService {
   private ws: WebSocket | null = null;
   private isConnected = false;
   private reconnectTimeout: any = null;
+  private intentionalClose = false;
   private pingInterval: any = null;
 
   private config: NodeSyncConfig = {
@@ -61,6 +62,7 @@ export class NodeSyncService {
   }
 
   public reconnect() {
+    this.intentionalClose = false;
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     if (this.pingInterval) clearInterval(this.pingInterval);
     if (this.ws) {
@@ -330,10 +332,28 @@ export class NodeSyncService {
   }
 
   private scheduleReconnect() {
+    if (this.intentionalClose) return; // pestaña en modo reposo: no reconectar
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.reconnectTimeout = setTimeout(() => {
       this.connect();
     }, 3000);
+  }
+
+  /** Cierra la conexión a propósito (pestaña en modo reposo) sin auto-reconectar. */
+  public disconnect() {
+    this.intentionalClose = true;
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+    if (this.pingInterval) clearInterval(this.pingInterval);
+    if (this.ws) {
+      try {
+        this.ws.onclose = null;
+        this.ws.onerror = null;
+        this.ws.close();
+      } catch (_) {}
+      this.ws = null;
+    }
+    this.isConnected = false;
+    this.onConnectionChangeCallback?.(false, 1);
   }
 
   // Master sends playback state and the next 20 songs queue (including current track with thumbnail and title) to all satellites
