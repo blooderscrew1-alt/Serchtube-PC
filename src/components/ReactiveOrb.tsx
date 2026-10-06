@@ -24,7 +24,7 @@ interface ReactiveOrbProps {
   waveScale?: number;      // Escala / tamaño de ondas (0.2 a 3.0)
   waveHeight?: number;     // Altura en px (ej. 320)
   waveFullscreen?: boolean; // Cubrir toda la pantalla
-  wakeWordInfo?: { enabled: boolean; wakeWord: string; isAwaitingCommand: boolean };
+  wakeWordInfo?: { enabled: boolean; wakeWord: string; isAwaitingCommand: boolean; micSource?: 'host' | 'node' };
 }
 
 /**
@@ -37,7 +37,32 @@ const EnclosedMicListeningAnimation: React.FC<{
   isActive: boolean;
   colors: { primary: string; secondary: string; accent: string; glow: string };
   wakeWord?: string;
-}> = ({ size, isActive, colors, wakeWord = 'música' }) => {
+  micSource?: 'host' | 'node';
+}> = ({ size, isActive, colors, wakeWord = 'música', micSource = 'host' }) => {
+  // 🎙️ Rojo = micrófono del host; Morado = activado por un nodo satélite
+  const M = micSource === 'node' ? {
+    ring1: 'border-purple-500/60', ring2: 'border-purple-400/40',
+    bracket1: 'border-purple-500/30', bracket2: 'border-purple-400/20',
+    arc: 'text-purple-400/80',
+    head: 'from-white via-purple-500 to-purple-700',
+    headShadow: 'shadow-[0_0_20px_rgba(168,85,247,0.9)]',
+    stand: 'border-purple-400', stem: 'bg-purple-400/90',
+    eqRed: 'bg-purple-400', eqShadowRed: 'shadow-[0_0_8px_#a855f7]',
+    eqLight: 'bg-purple-300', eqShadowLight: 'shadow-[0_0_8px_#d8b4fe]',
+    badge: 'bg-purple-600/30 border border-purple-400/50',
+    dot: 'bg-purple-400', badgeText: 'text-purple-200'
+  } : {
+    ring1: 'border-red-500/60', ring2: 'border-red-400/40',
+    bracket1: 'border-red-500/30', bracket2: 'border-red-400/20',
+    arc: 'text-red-400/80',
+    head: 'from-white via-red-500 to-red-700',
+    headShadow: 'shadow-[0_0_20px_rgba(239,68,68,0.9)]',
+    stand: 'border-red-400', stem: 'bg-red-400/90',
+    eqRed: 'bg-red-400', eqShadowRed: 'shadow-[0_0_8px_#ef4444]',
+    eqLight: 'bg-red-300', eqShadowLight: 'shadow-[0_0_8px_#fca5a5]',
+    badge: 'bg-red-600/30 border border-red-400/50',
+    dot: 'bg-red-400', badgeText: 'text-red-200'
+  };
   return (
     <div
       className={`absolute inset-0 rounded-full overflow-hidden flex flex-col items-center justify-center transition-all duration-300 pointer-events-none select-none z-20 ${
@@ -55,21 +80,21 @@ const EnclosedMicListeningAnimation: React.FC<{
       {isActive && (
         <>
           <div
-            className="absolute rounded-full border border-red-500/60 animate-mic-pulse-ring pointer-events-none"
+            className={`absolute rounded-full border ${M.ring1} animate-mic-pulse-ring pointer-events-none`}
             style={{ width: `${Math.round(size * 0.75)}px`, height: `${Math.round(size * 0.75)}px` }}
           />
           <div
-            className="absolute rounded-full border border-red-400/40 animate-mic-pulse-ring-delayed pointer-events-none"
+            className={`absolute rounded-full border ${M.ring2} animate-mic-pulse-ring-delayed pointer-events-none`}
             style={{ width: `${Math.round(size * 0.85)}px`, height: `${Math.round(size * 0.85)}px` }}
           />
 
           {/* 2. Rotating High-Tech HUD Perimeter Brackets & Rings */}
           <div
-            className="absolute rounded-full border border-dashed border-red-500/30 animate-mic-spin-slow pointer-events-none"
+            className={`absolute rounded-full border border-dashed ${M.bracket1} animate-mic-spin-slow pointer-events-none`}
             style={{ width: `${Math.round(size * 0.92)}px`, height: `${Math.round(size * 0.92)}px` }}
           />
           <div
-            className="absolute rounded-full border border-dotted border-red-400/20 animate-mic-spin-reverse pointer-events-none"
+            className={`absolute rounded-full border border-dotted ${M.bracket2} animate-mic-spin-reverse pointer-events-none`}
             style={{ width: `${Math.round(size * 0.65)}px`, height: `${Math.round(size * 0.65)}px` }}
           />
         </>
@@ -91,7 +116,7 @@ const EnclosedMicListeningAnimation: React.FC<{
         <div className="relative flex items-center justify-center">
           {/* Left Sound Wave Arc */}
           <svg
-            className="w-5 h-8 sm:w-6 sm:h-10 text-red-400/80 -mr-1 animate-pulse"
+            className={`w-5 h-8 sm:w-6 sm:h-10 ${M.arc} -mr-1 animate-pulse`}
             viewBox="0 0 24 36"
             fill="none"
             stroke="currentColor"
@@ -105,7 +130,7 @@ const EnclosedMicListeningAnimation: React.FC<{
           {/* Central High-Tech Microphone Housing */}
           <div className="relative flex flex-col items-center justify-center px-1">
             {/* Microphone Grille / Head */}
-            <div className="relative w-7 h-10 sm:w-8 sm:h-12 rounded-full bg-gradient-to-b from-white via-red-500 to-red-700 border-2 border-white/90 shadow-[0_0_20px_rgba(239,68,68,0.9)] flex items-center justify-center overflow-hidden">
+            <div className={`relative w-7 h-10 sm:w-8 sm:h-12 rounded-full bg-gradient-to-b ${M.head} border-2 border-white/90 ${M.headShadow} flex items-center justify-center overflow-hidden`}>
               {/* Internal Mesh Texture */}
               <div className="absolute inset-0 bg-[radial-gradient(#ffffff_1px,transparent_1px)] [background-size:3px_3px] opacity-60" />
               {/* Central Glowing Capsule LED */}
@@ -113,16 +138,16 @@ const EnclosedMicListeningAnimation: React.FC<{
             </div>
 
             {/* Microphone U-Bracket Stand */}
-            <div className="-mt-1 w-10 sm:w-12 h-5 sm:h-6 border-b-2 border-x-2 border-red-400 rounded-b-xl flex items-center justify-center" />
+            <div className={`-mt-1 w-10 sm:w-12 h-5 sm:h-6 border-b-2 border-x-2 ${M.stand} rounded-b-xl flex items-center justify-center`} />
 
             {/* Base Stem */}
-            <div className="w-1.5 h-3 sm:h-4 bg-red-400/90 shadow-sm" />
+            <div className={`w-1.5 h-3 sm:h-4 ${M.stem} shadow-sm`} />
             <div className="w-6 sm:w-8 h-1 sm:h-1.5 rounded-full bg-white/90 shadow-[0_0_10px_rgba(255,255,255,0.8)]" />
           </div>
 
           {/* Right Sound Wave Arc */}
           <svg
-            className="w-5 h-8 sm:w-6 sm:h-10 text-red-400/80 -ml-1 animate-pulse"
+            className={`w-5 h-8 sm:w-6 sm:h-10 ${M.arc} -ml-1 animate-pulse`}
             viewBox="0 0 24 36"
             fill="none"
             stroke="currentColor"
@@ -136,19 +161,19 @@ const EnclosedMicListeningAnimation: React.FC<{
 
         {/* 5. Animated Voice Equalizer Spectrum Bars nested in orb bottom */}
         <div className="flex items-end justify-center gap-1 mt-2.5 h-6">
-          <div className="w-1 bg-red-400 rounded-full animate-mic-eq-1 shadow-[0_0_8px_#ef4444]" />
+          <div className={`w-1 ${M.eqRed} rounded-full animate-mic-eq-1 ${M.eqShadowRed}`} />
           <div className="w-1 bg-white rounded-full animate-mic-eq-2 shadow-[0_0_8px_#ffffff]" />
-          <div className="w-1 bg-red-400 rounded-full animate-mic-eq-3 shadow-[0_0_8px_#ef4444]" />
+          <div className={`w-1 ${M.eqRed} rounded-full animate-mic-eq-3 ${M.eqShadowRed}`} />
           <div className="w-1 bg-white rounded-full animate-mic-eq-4 shadow-[0_0_8px_#ffffff]" />
-          <div className="w-1 bg-red-300 rounded-full animate-mic-eq-2 shadow-[0_0_8px_#fca5a5]" />
+          <div className={`w-1 ${M.eqLight} rounded-full animate-mic-eq-2 ${M.eqShadowLight}`} />
           <div className="w-1 bg-white rounded-full animate-mic-eq-3 shadow-[0_0_8px_#ffffff]" />
           <div className="w-1 bg-red-400 rounded-full animate-mic-eq-1 shadow-[0_0_8px_#ef4444]" />
         </div>
 
         {/* 6. High-Tech Badge Label inside the orb */}
-        <div className="mt-1 px-2.5 py-0.5 rounded-full bg-red-600/30 border border-red-400/50 shadow-md flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping" />
-          <span className="text-[9px] sm:text-[10px] font-mono font-extrabold tracking-widest text-red-200 uppercase">
+        <div className={`mt-1 px-2.5 py-0.5 rounded-full ${M.badge} shadow-md flex items-center gap-1.5`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${M.dot} animate-ping`} />
+          <span className={`text-[9px] sm:text-[10px] font-mono font-extrabold tracking-widest ${M.badgeText} uppercase`}>
             ESCUCHANDO
           </span>
         </div>
@@ -691,6 +716,7 @@ export const ReactiveOrb: React.FC<ReactiveOrbProps> = React.memo(({
             size={currentOrbSize}
             isActive={Boolean(wakeWordInfo?.isAwaitingCommand)}
             colors={colors}
+            micSource={wakeWordInfo?.micSource}
             wakeWord={wakeWordInfo?.wakeWord || 'música'}
           />
         </div>

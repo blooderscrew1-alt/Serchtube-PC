@@ -310,6 +310,8 @@ export default function App() {
   const [lastTranscript, setLastTranscript] = useState<string>('');
   const [assistantResponse, setAssistantResponse] = useState<string>('Asistente SerchTube listo');
   const [isListening, setIsListening] = useState<boolean>(false);
+  // 🎙️ Fuente de activación del micro: 'host' (micro de la PC, orbe rojo) o 'node' (nodo satélite, orbe morado)
+  const [micActivationSource, setMicActivationSource] = useState<'host' | 'node' | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(true);
   const [isDirectMicActive, setIsDirectMicActive] = useState<boolean>(false);
   const isDirectMicActiveRef = useRef<boolean>(false);
@@ -1250,6 +1252,7 @@ export default function App() {
           setIsScreensaverActive(false);
           setIsAwaitingCommandAfterWakeWord(true);
           isAwaitingCommandRef.current = true;
+          setMicActivationSource('host');
           setSystemStatus('listening');
           setIsListening(true);
           setLastTranscript(parsed.isWakeWordOnly ? '' : parsed.commandText);
@@ -1359,6 +1362,7 @@ export default function App() {
               setIsScreensaverActive(false);
               setIsAwaitingCommandAfterWakeWord(true);
               isAwaitingCommandRef.current = true;
+              setMicActivationSource('host');
               setSystemStatus('listening');
               setIsListening(true);
               setAssistantResponse(`⚡ ¡"${wakeWordStr}" detectada! Escuchando tu orden (5s)...`);
@@ -3005,6 +3009,7 @@ export default function App() {
         setIsScreensaverActive(false);
         setIsAwaitingCommandAfterWakeWord(true);
         isAwaitingCommandRef.current = true;
+        setMicActivationSource('node');
         setSystemStatus('listening');
         setIsListening(true);
         setLastTranscript('🎙️ Micrófono activado por estación externa');
@@ -3481,6 +3486,7 @@ export default function App() {
       speech.startListening();
       setIsListening(true);
       setIsDirectMicActive(true);
+      setMicActivationSource('host');
       isDirectMicActiveRef.current = true;
       setSystemStatus('listening');
       setAssistantResponse('🎙️ Escuchando orden... (Di tu canción o comando)');
@@ -3738,7 +3744,8 @@ export default function App() {
         wakeWordInfo={{
           enabled: speechConfig.wakeWordEnabled !== false,
           wakeWord: speechConfig.wakeWord || 'música',
-          isAwaitingCommand: isAwaitingCommandAfterWakeWord
+          isAwaitingCommand: isAwaitingCommandAfterWakeWord,
+          micSource: micActivationSource || 'host'
         }}
         playlistQueue={playlistQueue}
         playlistIndex={playlistIndex}
