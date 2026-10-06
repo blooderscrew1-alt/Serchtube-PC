@@ -289,6 +289,52 @@ def make_button(parent, text, command, bg=None, fg=None, width=None, bold=False)
     )
 
 
+class Tooltip:
+    """Globo de texto que aparece al pasar el cursor sobre un control."""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self.balloon = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _show(self, _e=None):
+        if self.balloon or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        self.balloon = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.attributes("-topmost", True)
+        frame = tk.Frame(tw, bg=COL["accent"])
+        lbl = tk.Label(
+            frame, text=self.text, bg=COL["card2"], fg=COL["fg"],
+            font=("Segoe UI", 9), justify="left", padx=8, pady=5,
+            wraplength=340,
+        )
+        lbl.pack()
+        frame.pack()
+        tw.wm_geometry(f"+{x}+{y}")
+
+    def _hide(self, _e=None):
+        if self.balloon:
+            try:
+                self.balloon.destroy()
+            except Exception:
+                pass
+            self.balloon = None
+
+
+def tip(widget, text):
+    """Adjunta un globo de texto a un control."""
+    try:
+        Tooltip(widget, text)
+    except Exception:
+        pass
+
+
 CONFIG_PATH = os.path.join(
     os.environ.get("APPDATA") or os.path.expanduser("~"), "MultiMicMonitor", "config.json"
 )
@@ -452,6 +498,7 @@ class App(tk.Tk):
                  font=("Segoe UI", 15, "bold")).pack(side="left")
         self.btn_refresh = make_button(top, "↻ Actualizar", self.refresh_devices)
         self.btn_refresh.pack(side="right")
+        tip(self.btn_refresh, "Vuelve a leer la lista de micrófonos y salidas. Úsalo después de conectar o desconectar un dispositivo. (Se desactiva mientras hay mics activos.)")
 
         out = tk.Frame(self, bg=bg)
         out.pack(fill="x", padx=14, pady=6)
@@ -459,6 +506,7 @@ class App(tk.Tk):
                  font=("Segoe UI", 9)).pack(side="left")
         self.combo = ttk.Combobox(out, textvariable=self.out_var, state="readonly")
         self.combo.pack(side="left", fill="x", expand=True, padx=8)
+        tip(self.combo, "Por dónde se oye la mezcla. Para que el asistente escuche TODOS tus mics: elige 'CABLE Input' (requiere VB-Cable) y pon 'CABLE Output' como micrófono predeterminado de Windows. El botón 'Guía Asistente' te ayuda.")
         self.combo.bind("<<ComboboxSelected>>", lambda e: self._remember())
 
         tk.Label(
@@ -485,30 +533,40 @@ class App(tk.Tk):
 
         bottom = tk.Frame(self, bg=bg)
         bottom.pack(fill="x", padx=14, pady=(4, 4))
-        make_button(bottom, "Activar todos", self.activate_all).pack(side="left")
-        make_button(bottom, "Desactivar todos", self.deactivate_all).pack(side="left", padx=6)
-        make_button(bottom, "🔇 Silenciar todos", self.mute_all, bg="#3a2226").pack(side="left")
-        make_button(bottom, "ℹ Diagnóstico", self.show_diag).pack(side="right")
-        make_button(bottom, "🎙 Guía Asistente (VB-Cable)", self.show_assistant_guide,
-                    bg="#12324f").pack(side="right", padx=6)
+        b_at = make_button(bottom, "Activar todos", self.activate_all); b_at.pack(side="left")
+        tip(b_at, "Abre TODOS los micrófonos de la lista (medidor funcionando y listos para la mezcla). No se oye nada en las bocinas.")
+        b_dt = make_button(bottom, "Desactivar todos", self.deactivate_all); b_dt.pack(side="left", padx=6)
+        tip(b_dt, "Cierra todos los micrófonos abiertos y libera los dispositivos.")
+        b_mut = make_button(bottom, "🔇 Silenciar todos", self.mute_all, bg="#3a2226"); b_mut.pack(side="left")
+        tip(b_mut, "Quita el sonido de la mezcla hacia las bocinas/cable, pero deja los mics abiertos (los medidores siguen activos).")
+        b_diag = make_button(bottom, "ℹ Diagnóstico", self.show_diag); b_diag.pack(side="right")
+        tip(b_diag, "Datos técnicos: versión de Python, librería de audio, dispositivos detectados. Útil si algo no funciona.")
+        b_guia = make_button(bottom, "🎙 Guía Asistente (VB-Cable)", self.show_assistant_guide, bg="#12324f"); b_guia.pack(side="right", padx=6)
+        tip(b_guia, "Pasos para que SerchTube escuche TODOS tus mics a la vez usando el cable virtual. Si VB-Cable ya está instalado, te ofrece poner la salida con un clic.")
 
         opts = tk.Frame(self, bg=bg)
         opts.pack(fill="x", padx=14, pady=(2, 0))
-        make_check(opts, "Iniciar con Windows", self.startup_var, self._on_startup_change).pack(side="left")
-        make_check(opts, "Iniciar minimizado", self.min_var, self._on_startup_change).pack(side="left", padx=14)
+        c_sw = make_check(opts, "Iniciar con Windows", self.startup_var, self._on_startup_change); c_sw.pack(side="left")
+        tip(c_sw, "Abre este programa automáticamente cada vez que enciendas la PC (recomendado para el asistente).")
+        c_min = make_check(opts, "Iniciar minimizado", self.min_var, self._on_startup_change); c_min.pack(side="left", padx=14)
+        tip(c_min, "Al arrancar con Windows, abre la ventana minimizada sin estorbar.")
         opts2 = tk.Frame(self, bg=bg)
         opts2.pack(fill="x", padx=14, pady=(0, 0))
-        make_check(opts2, "Recordar qué micrófonos se escuchan (cuidado con las bocinas)",
-                   self.rl_var, self._remember).pack(side="left")
+        c_rl = make_check(opts2, "Recordar qué micrófonos se escuchan (cuidado con las bocinas)",
+                   self.rl_var, self._remember); c_rl.pack(side="left")
+        tip(c_rl, "Guarda qué mics estaban mandando sonido y los reactiva al abrir. CUIDADO: si estaban conectados a bocinas reales, puede generarse eco.")
 
         opts3 = tk.Frame(self, bg=bg)
         opts3.pack(fill="x", padx=14, pady=(2, 0))
-        make_check(opts3, "📌 Siempre visible", self.ontop_var, self._on_ontop_change).pack(side="left")
+        c_top = make_check(opts3, "📌 Siempre visible", self.ontop_var, self._on_ontop_change); c_top.pack(side="left")
+        tip(c_top, "Mantiene esta ventana por encima de las demás (útil mientras calibras micrófonos).")
         tk.Label(opts3, text="Vol. maestro de la mezcla:", bg=bg, fg=COL["muted"],
                  font=("Segoe UI", 9)).pack(side="left", padx=(14, 4))
         self.master_var = tk.DoubleVar(value=self.master_gain)
-        ttk.Scale(opts3, from_=0.0, to=2.0, value=self.master_gain,
-                  command=self._on_master_gain).pack(side="left", fill="x", expand=True)
+        sc_master = ttk.Scale(opts3, from_=0.0, to=2.0, value=self.master_gain,
+                  command=self._on_master_gain)
+        sc_master.pack(side="left", fill="x", expand=True)
+        tip(sc_master, "Volumen general de TODA la mezcla que sale hacia las bocinas o el cable (100% = sin cambio).")
         self.master_lbl = tk.Label(opts3, text=f"{int(self.master_gain * 100)}%", bg=bg,
                                    fg=COL["fg"], font=("Segoe UI", 9, "bold"), width=5)
         self.master_lbl.pack(side="left", padx=(6, 0))
@@ -583,12 +641,14 @@ class App(tk.Tk):
         status = tk.Label(head, text="Apagado", bg=c, fg=COL["muted"], font=("Segoe UI", 9))
         status.pack(side="right")
         auto_var = tk.BooleanVar(value=bool(saved.get("auto", True)))
-        tk.Checkbutton(
+        chk_auto = tk.Checkbutton(
             head, text="Iniciar al abrir", variable=auto_var, command=self._remember,
             bg=c, fg=COL["muted"], activebackground=c, activeforeground=COL["fg"],
             selectcolor=COL["card2"], font=("Segoe UI", 9), bd=0, highlightthickness=0,
             cursor="hand2",
-        ).pack(side="right", padx=14)
+        )
+        chk_auto.pack(side="right", padx=14)
+        tip(chk_auto, "Si está marcado, este micrófono se activa solo cada vez que abres el programa (o enciendes la PC).")
 
         row = {
             "mic": mic, "status": status, "status_txt": "", "auto": auto_var,
@@ -597,21 +657,26 @@ class App(tk.Tk):
         }
         edit_btn.bind("<Button-1>", lambda e, r=row: self._rename(r))
         name_lbl.bind("<Double-Button-1>", lambda e, r=row: self._rename(r))
+        tip(name_lbl, "Nombre real del dispositivo. Doble clic (o la ✎) para ponerle un apodo, ej: 'Micro cocina'.")
 
         # --- Fila 2: botones y volumen ---
         ctl = tk.Frame(card, bg=c)
         ctl.pack(fill="x", pady=(8, 0))
         btn_act = make_button(ctl, "⏻  Activar", lambda r=row: self.on_active_toggle(r), width=11)
         btn_act.pack(side="left")
+        tip(btn_act, "Abre este micrófono: su medidor empieza a funcionar y su audio entra a la mezcla. No se oye en las bocinas a menos que actives 'Escuchar'.")
         btn_lis = make_button(ctl, "🔇 Silenciado", lambda r=row: self.on_listen_toggle(r), width=13)
         btn_lis.config(state="disabled")
         btn_lis.pack(side="left", padx=6)
+        tip(btn_lis, "Escuchar = este mic se oye por la salida elegida. Para el asistente con VB-Cable NO hace falta: con 'Activar' basta.")
         btn_boost = make_button(ctl, "", lambda r=row: self._cycle_boost(r), width=14)
         btn_boost.pack(side="left")
+        tip(btn_boost, "Refuerzo extra de ganancia en pasos de +6 dB para mics flojos. Mira el medidor: si llega al rojo, baja un paso o se distorsiona.")
         tk.Label(ctl, text="Vol", bg=c, fg=COL["muted"], font=("Segoe UI", 9)).pack(side="left", padx=(12, 2))
         vol = ttk.Scale(ctl, from_=0.0, to=2.0, value=mic.gain,
                         command=lambda v, m=mic: self._on_gain(m, v))
         vol.pack(side="left", fill="x", expand=True)
+        tip(vol, "Volumen de ESTE micrófono dentro de la mezcla (0% a 200%). Se guarda solo.")
 
         # --- Fila 3: medidor de nivel ---
         mrow = tk.Frame(card, bg=c)
