@@ -1253,6 +1253,11 @@ export default function App() {
           setSystemStatus('listening');
           setIsListening(true);
           setLastTranscript(parsed.isWakeWordOnly ? '' : parsed.commandText);
+          // 🎚️ Atenuar la música YA (ruta interina): esta es la vía por la que pasa casi
+          // siempre la detección con "micrófono caliente"; antes solo bajaba al llegar el final
+          if (playerStateRef.current.isPlaying) {
+            AudioEngine.getInstance().startDucking(150);
+          }
         } else {
           // Si la palabra clave está desactivada o ya estamos en el flujo activo de escucha
           setLastTranscript(transcript);
