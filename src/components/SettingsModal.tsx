@@ -1740,7 +1740,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                               <option value="">— Elige la voz de ElevenLabs —</option>
                               {elevenVoices.map(v => (
                                 <option key={v.id} value={v.id}>
-                                  {v.name} {v.accent ? `(${v.accent})` : ''}
+                                  {v.name} {v.accent ? `(${v.accent})` : ''}{v.category && v.category !== 'premade' ? ' ★' : ''}
                                 </option>
                               ))}
                             </select>

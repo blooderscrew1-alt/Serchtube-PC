@@ -2573,26 +2573,43 @@ async function startServer() {
     }
   });
 
-  // Lista de voces disponibles en la cuenta de ElevenLabs
+  // Lista de voces disponibles en las cuentas de ElevenLabs (UNE todas las claves:
+  // voces agregadas de la Biblioteca en cada cuenta aparecen aunque esté repetida en otra)
   app.get("/api/eleven-voices", async (req, res) => {
     if (elevenLabsKeys.length === 0) return res.status(400).json({ error: "Sin clave de ElevenLabs" });
     try {
-      const r = await fetch("https://api.elevenlabs.io/v1/voices", {
-        headers: { "xi-api-key": elevenLabsKeys[workingElevenIdx] || elevenLabsKeys[0] }
-      });
-      if (!r.ok) return res.status(502).json({ error: "No se pudo consultar ElevenLabs" });
-      const data: any = await r.json();
-      // Solo voces "premade": son las usables con el plan gratuito vía API.
-      // Las "professional"/de librería responden 402 en el plan free.
-      const voices = (data.voices || [])
-        .filter((v: any) => v.category === "premade")
-        .map((v: any) => ({
-          id: v.voice_id,
-          name: v.name.replace(/ - .*/, ""),
-          accent: v.labels?.accent || "",
-          gender: v.labels?.gender || "",
-          category: v.category || ""
-        }));
+      const byId = new Map<string, { id: string; name: string; accent: string; gender: string; category: string }>();
+      // Categorías admitidas: premade (de fábrica) y cloned/generated (voces de la
+      // Biblioteca de voces agregadas a la cuenta, que antes se filtraban y por
+      // eso nunca aparecían en el programa)
+      const okCategories = new Set(["premade", "cloned", "generated"]);
+      for (const apiKey of elevenLabsKeys) {
+        try {
+          const r = await fetch("https://api.elevenlabs.io/v1/voices", {
+            headers: { "xi-api-key": apiKey }
+          });
+          if (!r.ok) continue; // clave inválida o sin acceso: seguir con las demás cuentas
+          const data: any = await r.json();
+          for (const v of (data.voices || [])) {
+            if (!okCategories.has(v.category)) continue;
+            if (byId.has(v.voice_id)) continue;
+            byId.set(v.voice_id, {
+              id: v.voice_id,
+              name: v.name.replace(/ - .*/, ""),
+              accent: v.labels?.accent || "",
+              gender: v.labels?.gender || "",
+              category: v.category || ""
+            });
+          }
+        } catch (_) { /* cuenta inaccesible: seguir con las demás */ }
+      }
+      // De fábrica primero, luego las de la Biblioteca; ambas ordenadas por nombre
+      const voices = [...byId.values()].sort((a, b) =>
+        a.category === b.category
+          ? a.name.localeCompare(b.name)
+          : (a.category === "premade" ? -1 : 1)
+      );
+      if (voices.length === 0) return res.status(502).json({ error: "Ninguna cuenta devolvió voces" });
       return res.json({ voices });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Error listando voces" });
