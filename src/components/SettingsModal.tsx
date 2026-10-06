@@ -2261,7 +2261,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                   ? 'bg-red-500/20 text-red-300 border-red-500/30'
                   : 'bg-white/10 text-gray-400 border-white/10'
               }`}>
-                {speechConfig.duckingEnabled ? 'ACTIVO (20%)' : 'DESACTIVADO'}
+                {speechConfig.duckingEnabled ? 'ACTIVO (SILENCIO 0%)' : 'DESACTIVADO'}
               </span>
             }
             isExpanded={!!expandedSections['audio_ducking']}

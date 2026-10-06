@@ -214,8 +214,9 @@ export class AudioEngine {
     this.isDucked = true;
     this.originalVolumeBeforeDucking = currentVolume;
 
-    // Duck volume to 20% of original
-    const duckedVol = Math.max(10, Math.round(currentVolume * 0.2));
+    // Silencio TOTAL (0%): el microfono de la PC llega a confundir palabras de la
+    // musica con comandos; con 20% todavia se colaban. Se restaura al terminar.
+    const duckedVol = 0;
     this.onDuckingChangeCallback?.(true, duckedVol);
 
     // Watchdog: Clear ducking after 7 seconds unconditionally in case speech recognition hangs
