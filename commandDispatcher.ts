@@ -1125,6 +1125,54 @@ export class CommandDispatcher {
       resolved.intent === 'MUTE' ||
       resolved.intent === 'UNMUTE';
 
+    // 🎙️ ACTIVATE_MIC: un nodo satélite detectó la palabra clave y solo pide
+    // encender el micrófono del host. Va ANTES del árbitro de turnos para que
+    // un comando musical reciente no lo descarte; lleva deduplicación propia.
+    const rawActivate =
+      String(resolved.originalAction || payload.action || '').toLowerCase().trim() === 'activate_mic' ||
+      (payload as any).commandType === 'ACTIVATE_MIC' ||
+      (payload as any).activateMic === true;
+    if (rawActivate) {
+      const duplicateActivate = this.findConcurrentDuplicate(
+        { intent: 'UNKNOWN', originalAction: 'activate_mic', rawText: '' } as ResolvedIntent,
+        nodeId,
+        room,
+        now
+      );
+      if (duplicateActivate) {
+        this.sendAck(senderWs, {
+          type: 'command_ack',
+          success: true,
+          message: 'Micrófono del host ya activado',
+          nodeId,
+          room
+        });
+        return;
+      }
+      this.recentCommands.push({
+        intent: 'UNKNOWN',
+        originalAction: 'activate_mic',
+        nodeId,
+        nodeName,
+        room,
+        timestamp: now
+      } as RecentSatelliteCommand);
+      this.dispatchToBrowserPlayer(room, {
+        event: 'ACTIVATE_MIC',
+        nodeId,
+        fromNode: nodeName,
+        wakeWord: (payload as any).wakeWord || (payload as any).payload?.wakeWord || ''
+      } as PlayerBrowserEvent, clientsMap, broadcastToRoom);
+      this.sendAck(senderWs, {
+        type: 'command_ack',
+        success: true,
+        message: 'Micrófono del host activado',
+        nodeId,
+        room
+      });
+      return;
+    }
+
     if (!isVolumeControl) {
       const activeTurn = this.roomActiveTurns.get(room);
       if (activeTurn && (now - activeTurn.timestamp < 4000)) {

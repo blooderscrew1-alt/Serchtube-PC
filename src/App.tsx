@@ -2990,7 +2990,7 @@ export default function App() {
       evtType === 'MUTE' ||
       evtType === 'UNMUTE';
 
-    if (!isVolumeEvt && evtType !== 'SCREENSAVER_START' && evtType !== 'SCREENSAVER_STOP') {
+    if (!isVolumeEvt && evtType !== 'SCREENSAVER_START' && evtType !== 'SCREENSAVER_STOP' && evtType !== 'ACTIVATE_MIC') {
       if (!tryAcquireTurn(`nodo_direct_${fromNode}`, evt.title || evt.videoId || evtType)) {
         console.log(`[SerchTube Master] 🛡️ Ventana de 3s: Evento ${evtType} descartado de "${fromNode}". Ya se aceptó una solicitud previa.`);
         return;
@@ -2998,6 +2998,37 @@ export default function App() {
     }
 
     switch (evt.event) {
+      case 'ACTIVATE_MIC': {
+        // 🎙️ Un nodo satélite detectó la palabra clave y solo pide encender el
+        // micrófono del host: NO se procesa ningún comando y NO se habla por voz
+        // (así los nodos no capturan la respuesta del asistente).
+        setIsScreensaverActive(false);
+        setIsAwaitingCommandAfterWakeWord(true);
+        isAwaitingCommandRef.current = true;
+        setSystemStatus('listening');
+        setIsListening(true);
+        setLastTranscript('🎙️ Micrófono activado por estación externa');
+        // Asegurar que el reconocimiento esté corriendo (por si estaba detenido)
+        SpeechService.getInstance().startListening();
+        // Atenuar la música para que el usuario pueda hablar suave
+        if (playerStateRef.current.isPlaying) {
+          AudioEngine.getInstance().startDucking(150);
+        }
+        // Ventana de inactividad: si nadie da una orden, cerrar solo
+        if (activeListeningTimerRef.current) clearTimeout(activeListeningTimerRef.current);
+        activeListeningTimerRef.current = setTimeout(() => {
+          setIsAwaitingCommandAfterWakeWord(false);
+          isAwaitingCommandRef.current = false;
+          setSystemStatus('idle');
+          setIsListening(false);
+          setAssistantResponse('⏱️ Micrófono abierto por estación externa cerrado (sin orden)');
+          AudioEngine.getInstance().stopDucking();
+          setTimeout(() => {
+            setAssistantResponse(prev => (prev && prev.includes('estación externa') ? null : prev));
+          }, 3000);
+        }, 8000);
+        break;
+      }
       case 'LOAD_VIDEO': {
         const newTrack: Track = {
           id: evt.videoId,
