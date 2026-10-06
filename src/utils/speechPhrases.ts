@@ -7,92 +7,85 @@ export function pickRandom<T>(items: T[]): T {
 // Rich, cheerful, friendly, enthusiastic, and witty phrases for wake word greetings
 // STRICT RULE: NEVER include the wake word ("música" / "musica") in greetings so the speakers don't reopen the mic
 export const WAKE_GREETINGS: Record<VoicePersonality, string[]> = {
+  // 🛡️ REGLA ESTRICTA: saludos SIEMPRE cortos (1-4 palabras). Los nodos satélite
+  // también capturan la voz del asistente por sus micrófonos; frases largas
+  // aumentan el riesgo de reactivarlos o de ser procesadas como comandos.
   animada: [
-    "¡Dime, jefe supremo del ritmo! ¿Qué temazo marchamos hoy?",
-    "¡A tus órdenes! Pídeme lo que quieras antes de que me ponga a cantar yo solo.",
-    "¡Oído cocina! ¿Qué canción quieres que reviente los altavoces de alegría?",
-    "¡Aquí estoy, vivito, coleando y con ganas de fiesta! ¿Qué escuchamos?",
-    "¡Dímelo cantando o dímelo hablando, pero dime tu temazo ya!",
-    "¡Uy, me llamaste! Dime qué temazo ponemos para alegrarte el día.",
-    "¡Activado y con las pilas puestas! ¿Qué te apetece gozar hoy?",
-    "¡A la orden, capitán del sonido! ¿Qué ritmo le echamos al asunto?",
-    "¡Suelto el micrófono para ti! Pide esa canción que te pone la piel de gallina.",
-    "¡Dime tú, que hoy pongo yo los temazos y tú la fiesta!",
-    "¡Epa! Aquí estoy. Pide por esa boquita...",
-    "¡Hola, estrella del camino! ¿Qué temazo va a sonar con todo hoy?",
-    "¡Te escucho al cien por cien! Sorpréndeme con tu selección.",
-    "¡Preparado! Pídeme lo que quieras y le damos caña al viaje.",
-    "¡Sintonizado y listo para la marcha! Dime qué temita marchamos.",
-    "¡Dime, genio del ritmo! ¿Con qué éxito deleitamos al público hoy?"
+    "¡Dime!",
+    "¡Te escucho!",
+    "¡Aquí estoy!",
+    "¡Dímelo!",
+    "¿Qué ponemos?",
+    "¡Epa! Dime.",
+    "¡Listo!",
+    "¡Sí, jefe?",
+    "Adelante.",
+    "¿Qué pongo?"
   ],
   directa: [
-    "¡A tus órdenes! ¿Qué temazo ponemos?",
-    "¡Oído! Dime qué canción marchamos.",
-    "¡Listo para darle ritmo! Te escucho...",
-    "¡Dime la canción y le damos caña!",
-    "¡Aquí estoy! Dime qué escuchamos hoy.",
-    "¡Venga ese comando! ¿Qué canción quieres?",
-    "¡Al habla SerchTube! Dime tu tema favorito.",
-    "¡Te escucho con ganas! ¿Qué ponemos?",
-    "¡A la orden! Dime artista o canción.",
-    "¡Preparado! Suelta tu orden."
+    "Dime.",
+    "Te escucho.",
+    "Aquí estoy.",
+    "¿Qué ponemos?",
+    "Listo.",
+    "Adelante.",
+    "Sí.",
+    "¿Qué pongo?"
   ],
   conductor: [
-    "¡Al volante y atento a la ruta! Dime qué canción ponemos para amenizar el viaje.",
-    "¡Copiloto en línea! Dime qué temazo suena en carretera hoy.",
-    "¡Ruta despejada y oídos listos! ¿Qué temazo marchamos, conductor?",
-    "¡Comando en carretera! Dime el artista o tema y mantén la vista al frente.",
-    "¡En cabina y a la escucha! ¿Qué éxito te acompaña en este viaje?",
-    "¡Rumbo al destino con el mejor ritmo! Te escucho, dime tu tema.",
-    "¡Carretera y manta! Dime qué canción pongo para devorar kilómetros."
+    "Dime, conductor.",
+    "Te escucho.",
+    "Copiloto listo.",
+    "¿Qué ponemos?",
+    "Aquí estoy.",
+    "Ruta clara. Dime."
   ],
   copiloto_rally: [
-    "¡A la escucha en cabina, dime qué temazo metemos a fondo!",
-    "¡Copiloto listo, pídeme marcha y aceleramos con ritmo!",
-    "¡Listos para acelerar en la siguiente curva! ¿Qué canción quieres?",
-    "¡Bandera verde en el velocímetro! Pide canción y no sueltes el pedal.",
-    "¡Gas a fondo y ritmo en los altavoces! ¿Qué tema marchamos, piloto?",
-    "¡Tramo cronometrado con ritmo! Dime qué temazo lanzamos."
+    "¡Copiloto listo!",
+    "¡Dime!",
+    "Te escucho.",
+    "¡A fondo! Dime.",
+    "¿Qué ponemos?"
   ],
   locutor_fm: [
-    "¡Sintonía abierta en SerchTube Radio! ¿Qué tema quieres que suene en las ondas hoy?",
-    "¡Micrófono encendido en directo! Pide tu canción favorita, ¡somos todo oídos!",
-    "¡En cabina y en antena! ¿Cuál es la petición estrella del día?",
-    "¡Saludos a todos los oyentes de la cabina! Dime tu tema y lo pinchamos ya mismo.",
-    "¡El mejor sonido de las ondas a tu servicio! Dime qué éxito suena hoy.",
-    "¡Estás en el número uno del dial! Pide tu canción y sube los decibelios."
+    "Al aire. Dime.",
+    "Te escuchamos.",
+    "¿Qué suena?",
+    "En antena. Dime.",
+    "Adelante, oyente."
   ],
   calida: [
-    "¡Hola! Qué gusto saludarte, ¿qué bonita canción te gustaría escuchar hoy?",
-    "¡Te escucho con todo el gusto del mundo! Dime qué canción te alegra el día.",
-    "¡Aquí estoy para acompañarte! Pídeme lo que quieras escuchar.",
-    "¡Qué alegría tenerte aquí! Dime tu canción favorita y la disfrutamos juntos.",
-    "¡Todo listo para ti! Cuéntame qué melodía te apetece hoy.",
-    "¡Dime qué ponemos para que este momento sea inolvidable!"
+    "Dime.",
+    "Te escucho.",
+    "Aquí estoy.",
+    "¿Qué ponemos?",
+    "Claro, dime.",
+    "Listo. Dime."
   ],
   jarvis: [
-    "Sistemas listos y optimizados. Indique la pieza sonora a decodificar.",
-    "Módulo de voz activo y con los sensores calibrados. Le escucho, señor.",
-    "Consola acústica a la espera de su instrucción. ¿Qué frecuencia desplegamos?",
-    "Procesador auditivo en línea. Transmita el vector de audio requerido.",
-    "Protocolo de entretenimiento iniciado. Indique qué obra interpretamos."
+    "A su orden.",
+    "Sistemas listos.",
+    "Le escucho.",
+    "Dígale.",
+    "En línea. Adelante."
   ],
   zen: [
-    "En calma y atención serena... te escucho con armonía. ¿Qué melodía te llama?",
-    "Fluyendo en el momento presente... dime qué melodía necesita tu alma.",
-    "Respirando hondo y en paz... comparte conmigo qué deseas escuchar.",
-    "El ambiente está listo para recibir tu melodía. Dime con suavidad."
+    "Te escucho.",
+    "En calma. Dime.",
+    "Aquí estoy.",
+    "Dime con calma."
   ],
   formal: [
-    "A su entera disposición. ¿Qué selecta pieza desea escuchar en este momento?",
-    "Le escucho con la mayor cortesía y diligencia. Indique su petición.",
-    "Un verdadero honor asistirle. ¿Qué canción o artista complacería sus oídos?",
-    "Sistema preparado para satisfacer su selección. Le escucho con atención."
+    "A su disposición.",
+    "Le escucho.",
+    "Dígame.",
+    "Indique su orden."
   ],
   cyberpunk: [
-    "Enlace neuronal de audio abierto. Transmite el paquete sonoro a ejecutar.",
-    "Canal de audio acoplado en la red. ¿Qué track de sintetizadores inyectamos?",
-    "Puerto auditivo listo. Dime qué frecuencia de neón disparamos en cabina."
+    "Enlace abierto.",
+    "Listo. Dime.",
+    "Te escucho.",
+    "Canal activo. Dime."
   ]
 };
 

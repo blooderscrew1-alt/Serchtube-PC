@@ -245,6 +245,7 @@ export class SpeechService {
   private ttsGuardUntil = 0;
   private lastSpokenText = '';
   private lastSpokenTimestamp = 0;
+  private lastSpeakRequestAt = 0;
 
   private config: SpeechConfig = {
     personality: 'directa',
@@ -964,6 +965,18 @@ export class SpeechService {
     // Sanitizar texto para que NUNCA mencione la palabra clave (ej: "música")
     const sanitized = this.sanitizeTextForTTS(text);
     if (!sanitized) return;
+
+    // 🛡️ Antirrepetición audible: si el mismo texto se pide dos veces en <4.5s
+    // (micro local + nodos satélite que capturan la misma orden), se dice UNA sola vez.
+    const nowReq = Date.now();
+    if (
+      sanitized === this.lastSpokenText &&
+      nowReq - this.lastSpeakRequestAt < 4500
+    ) {
+      console.log(`[SpeechService] 🔇 Respuesta duplicada suprimida (<4.5s): "${sanitized.slice(0, 60)}"`);
+      return;
+    }
+    this.lastSpeakRequestAt = nowReq;
 
     // Detener cualquier locución anterior (neuronal o del navegador) y tomar el control
     const mySeq = ++this.ttsSeq;

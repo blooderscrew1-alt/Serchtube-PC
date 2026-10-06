@@ -1858,9 +1858,11 @@ export default function App() {
     // 🛡️ Deduplicación Rápida de Transcripción: Evitar llamadas concurrentes con el mismo texto
     const now = Date.now();
     const normText = normalizeText(rawTranscript);
-    const lastNorm = normalizeText(lastHandledTranscriptRef.current.text);
-    if (normText && lastNorm && normText === lastNorm && now - lastHandledTranscriptRef.current.timestamp < 3000) {
-      console.log(`[SerchTube] 🛡️ Transcripción duplicada ignorada (<3s): "${rawTranscript}"`);
+    // Comparar ignorando la palabra de activación ("música pausa" ≡ "pausa")
+    const normCmp = normText.replace(/^(oye\s+)?(musica|music|hey)\s+/, '');
+    const lastNorm = normalizeText(lastHandledTranscriptRef.current.text).replace(/^(oye\s+)?(musica|music|hey)\s+/, '');
+    if (normCmp && lastNorm && normCmp === lastNorm && now - lastHandledTranscriptRef.current.timestamp < 4000) {
+      console.log(`[SerchTube] 🛡️ Transcripción duplicada ignorada (<4s): "${rawTranscript}"`);
       return;
     }
     lastHandledTranscriptRef.current = { text: rawTranscript, timestamp: now };
