@@ -495,6 +495,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
   const [isTestingMic, setIsTestingMic] = useState<boolean>(false);
   const [micTestVolume, setMicTestVolume] = useState<number>(0);
   const [micPermissionGranted, setMicPermissionGranted] = useState<boolean>(false);
+  const [multimicMsg, setMultimicMsg] = useState<string | null>(null);
   const [showPythonScriptModal, setShowPythonScriptModal] = useState<boolean>(false);
   const [copiedScript, setCopiedScript] = useState<boolean>(false);
   const micTestStreamRef = React.useRef<MediaStream | null>(null);
@@ -1416,13 +1417,33 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                     </span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowPythonScriptModal(true)}
-                  className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white transition-colors cursor-pointer shrink-0"
-                >
-                  Ver Código Python
-                </button>
+                <div className="flex flex-col gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setMultimicMsg('...');
+                      try {
+                        const r = await fetch('/api/multimic/launch', { method: 'POST' });
+                        const d = await r.json();
+                        setMultimicMsg(r.ok ? (d.already ? '✅ El monitor ya estaba abierto' : '✅ Monitor abierto (ventana aparte)') : `⚠ ${d.error || 'No se pudo abrir'}`);
+                      } catch (_) {
+                        setMultimicMsg('⚠ Servidor no disponible');
+                      }
+                      setTimeout(() => setMultimicMsg(null), 5000);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-green-600/80 hover:bg-green-600 border border-green-400/40 text-xs font-bold text-white transition-colors cursor-pointer"
+                  >
+                    🚀 Abrir / Instalar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPythonScriptModal(true)}
+                    className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white transition-colors cursor-pointer"
+                  >
+                    Ver Código Python
+                  </button>
+                  {multimicMsg && <span className="text-[10px] text-gray-300 max-w-[180px] text-right">{multimicMsg}</span>}
+                </div>
               </div>
 
               {!micPermissionGranted && (

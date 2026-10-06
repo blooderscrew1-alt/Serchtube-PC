@@ -4,7 +4,7 @@ import http from "http";
 import path from "path";
 import os from "os";
 import fs from "fs";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import { commandDispatcher, isResumeCommand, ENABLE_SMART_CORRECTION } from "./commandDispatcher.ts";
 import {
@@ -2614,6 +2614,85 @@ async function startServer() {
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || "Error listando voces" });
     }
+  });
+
+  // ═══ Multi Mic Monitor: herramienta ligada pero NO dependiente ═══
+  // Si no está instalada o no hay Python, SerchTube funciona exactamente igual.
+  const MULTIMIC_DIR = path.join(process.cwd(), "herramientas", "multimic");
+  let multimicPid: number | null = null;
+  let multimicPythonCache: { ok: boolean; exe: string } | null = null;
+
+  function multimicInstalled(): boolean {
+    return fs.existsSync(path.join(MULTIMIC_DIR, "MultiMicMonitor.py"));
+  }
+
+  function multimicRunning(): boolean {
+    if (multimicPid === null) return false;
+    try {
+      process.kill(multimicPid, 0); // señal 0 = solo comprobar que existe
+      return true;
+    } catch (_) {
+      multimicPid = null;
+      return false;
+    }
+  }
+
+  function findPython(): Promise<{ ok: boolean; exe: string }> {
+    if (multimicPythonCache) return Promise.resolve(multimicPythonCache);
+    return new Promise((resolve) => {
+      const tryCmd = (cmd: string) => exec(cmd, { timeout: 5000 }, (err, stdout) => {
+        if (!err && /Python 3\./.test(String(stdout))) {
+          const exe = cmd.startsWith("py") ? "py" : "python";
+          multimicPythonCache = { ok: true, exe };
+          resolve(multimicPythonCache);
+        } else if (cmd === "py -3 --version") {
+          tryCmd("python --version");
+        } else {
+          resolve({ ok: false, exe: "" });
+        }
+      });
+      tryCmd("py -3 --version");
+    });
+  }
+
+  app.get("/api/multimic/status", async (_req, res) => {
+    const python = await findPython();
+    res.json({ installed: multimicInstalled(), running: multimicRunning(), python: python.ok });
+  });
+
+  app.post("/api/multimic/launch", async (_req, res) => {
+    if (!multimicInstalled()) {
+      return res.status(404).json({ error: "El monitor no está incluido en esta instalación" });
+    }
+    if (multimicRunning()) {
+      return res.json({ ok: true, already: true });
+    }
+    const python = await findPython();
+    if (!python.ok) {
+      return res.status(400).json({ error: "No hay Python 3 instalado en esta PC" });
+    }
+    try {
+      const child = spawn(python.exe, [path.join(MULTIMIC_DIR, "MultiMicMonitor.py")], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false
+      });
+      child.unref();
+      multimicPid = child.pid ?? null;
+      res.json({ ok: true, pid: multimicPid });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "No se pudo abrir el monitor" });
+    }
+  });
+
+  app.get("/api/multimic/download/:file", (req, res) => {
+    const name = String(req.params.file);
+    if (!["MultiMicMonitor.py", "Instalar e Iniciar.bat"].includes(name)) {
+      return res.status(400).json({ error: "Archivo no permitido" });
+    }
+    const full = path.join(MULTIMIC_DIR, name);
+    if (!fs.existsSync(full)) return res.status(404).json({ error: "No existe" });
+    res.download(full, name);
   });
 
   // ═══ Carga en lote: pega texto mezclado (nombres, etiquetas, claves) y la app
