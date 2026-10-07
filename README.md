@@ -119,3 +119,43 @@ Herramientas de recuperación (no hace falta reiniciar la PC):
 - `MultiMicMonitor.py --autotest`: prueba sin interfaz que los micrófonos
   configurados entregan datos de verdad.
 - Traza completa en `%APPDATA%\MultiMicMonitor\multimic.log`.
+
+## Despliegue en otras PC (no depende de este equipo)
+
+Todo lo anterior es **genérico**: no hay rutas, dispositivos ni marcas fijas. El
+equipo de desarrollo solo se usó para probarlo. Cómo validar cada PC objetivo:
+
+1. **Informe del equipo** (no abre ningún dispositivo, cero riesgo):
+   `python MultiMicMonitor.py --diagnostico`
+   Guarda un `.txt` en `%APPDATA%\MultiMicMonitor\` con Windows, Python,
+   sounddevice/PortAudio, APIs de audio, todas las entradas/salidas, cuáles
+   parecen virtuales, los ajustes efectivos y la cuarentena.
+2. **Prueba real de entradas** (abre cada una 2 s y dice si entregan datos):
+   `python MultiMicMonitor.py --diagnostico --sondas`
+   Si algo no entrega datos, el informe sugiere qué agregar a `virtual_extra`.
+3. **Ajustar sin tocar código** — en `%APPDATA%\MultiMicMonitor\config.json`:
+
+   | Ajuste | Para qué |
+   |---|---|
+   | `virtual_extra: ["mi_dsp", …]` | reconocer como virtuales dispositivos con otros nombres (por defecto: Steam Streaming, VB-Cable, Voicemeeter, OBS, NVIDIA Broadcast, Sound Mapper, Stereo Mix…) |
+   | `abrir_virtuales: true` | abrirlos igual al iniciar con Windows |
+   | `seg_espera_audio`, `seg_comprobar_datos`, `intentos_comprobar` | equipos lentos o rápidos |
+   | `max_fallos`, `seg_modo_seguro`, `dias_cuarentena` | agresividad del aislamiento |
+
+   La protección **no depende de esos nombres**: abrir de a uno + comprobar que
+   llegan datos + cuarentena + modo seguro funcionan en cualquier equipo.
+
+Y el lanzador también es genérico:
+
+- **Navegador**: usa el que exista — **Edge, Chrome o Brave** (los tres son
+  Chromium y aceptan `--app`/`--user-data-dir`), o el predeterminado del sistema
+  si no hay ninguno. Forzarlo: `-Navegador edge|chrome|brave|predeterminado`.
+  Cada navegador tiene su **propio** perfil dedicado (`SerchTubeEdge`,
+  `SerchTubeEdge-Chrome`, …) para que no se mezclen.
+- **Detección de ventana por título real**: un proceso de navegador puede tener
+  varias ventanas (la app, otras del perfil personal, avisos), así que se busca la
+  ventana "SerchTube Music" y recién ahí se considera que la app está abierta.
+- **Servidor**: si existe `dist/server.cjs` lo usa (build de producción); si no,
+  `npm run dev`. No hay rutas absolutas ni dependencia de este equipo.
+- **Todo por parámetros**: `-Puerto`, `-PerfilEdge`, `-RetardoSegundos`,
+  `-EsperaServidor`, `-Modo`, `-Navegador`, `-SinAutoInicio`, `-RepararPerfil`.

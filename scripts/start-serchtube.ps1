@@ -4,23 +4,29 @@
 
   Que hace:
     1. Candado: si otro arranque de SerchTube esta en curso, no hace nada.
-       (Dos instancias abriendo Edge con el mismo perfil son LA causa del mensaje
-       "Microsoft Edge no puede leer ni escribir en el directorio de datos".)
-    2. Comprueba si el servidor ya responde en el puerto 3000; si no, lo arranca oculto.
-    3. Espera a que el perfil de Edge exista y sea ESCRIBIBLE antes de abrir nada.
-    4. Si ya hay un Edge con nuestro perfil (aunque todavia no tenga ventana),
+       (Dos instancias abriendo el mismo perfil son LA causa del mensaje
+       "no puede leer ni escribir en el directorio de datos".)
+    2. Comprueba si el servidor ya responde en el puerto 3000; si no, lo arranca oculto
+       (primero el build de produccion dist\server.cjs, si existe; si no, npm run dev).
+    3. Espera a que el perfil del navegador exista y sea ESCRIBIBLE antes de abrir nada.
+    4. Si ya hay un navegador con nuestro perfil (aunque todavia no tenga ventana),
        espera a su ventana y la trae al frente: nunca abre un segundo.
-    5. Abre Edge con perfil dedicado en modo app (una sola ventana, sin pestanas).
+    5. Abre el navegador con perfil dedicado en modo app (una sola ventana, sin pestanas).
+       Sirve Edge o Chrome; si no hay ninguno, abre la URL con el predeterminado.
     6. Verifica que la ventana aparecio; si no, se autorepara: aparta el perfil
-       dañado y reintenta con uno limpio.
+       daÃ±ado y reintenta con uno limpio.
     7. Registra el arranque automatico de Windows (una sola vez).
+
+  Pensado para cualquier PC con Windows: no depende de rutas ni de dispositivos
+  concretos. Se puede ajustar todo por parametros.
 
   Uso:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-serchtube.ps1
     powershell ... -File scripts\start-serchtube.ps1 -QuitarAutoInicio
     powershell ... -File scripts\start-serchtube.ps1 -SinAutoInicio
     powershell ... -File scripts\start-serchtube.ps1 -RepararPerfil
-    powershell ... -File scripts\start-serchtube.ps1 -PerfilNormal   (usa tu Edge normal)
+    powershell ... -File scripts\start-serchtube.ps1 -PerfilNormal   (perfil habitual)
+    powershell ... -File scripts\start-serchtube.ps1 -Navegador chrome
     powershell ... -File scripts\start-serchtube.ps1 -Modo pestana
     powershell ... -File scripts\start-serchtube.ps1 -SinNavegador
     powershell ... -File scripts\start-serchtube.ps1 -AutoconcederMicro
@@ -38,6 +44,10 @@ param(
 
   # Usar el perfil normal de Edge (sin --user-data-dir): plan B si el perfil dedicado falla
   [switch]$PerfilNormal,
+
+  # auto (el que exista: Edge, Chrome o Brave) | edge | chrome | brave | predeterminado
+  [ValidateSet('auto', 'edge', 'chrome', 'brave', 'predeterminado')]
+  [string]$Navegador = 'auto',
 
   # Cerrar Edge con nuestro perfil y apartar el perfil (se crea uno limpio)
   [switch]$RepararPerfil,
@@ -61,6 +71,9 @@ $NombreAutoInicio = 'SerchTube Music'
 $TituloVentana = 'SerchTube Music'
 $VbsSilencioso = Join-Path $PSScriptRoot 'start-serchtube-silencioso.vbs'
 $ClaveRun = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+# Perfil que se usa de verdad. Se calcula al elegir el navegador: cada navegador
+# tiene su propio directorio (Edge mantiene el historico para no perder permisos).
+$PerfilReal = $PerfilEdge
 
 # Contenido del guion silencioso, por si alguien borro el archivo del repo
 $GuionVbs = @'
@@ -103,75 +116,140 @@ function Test-Servidor {
   }
 }
 
-function Get-EdgeExe {
+function Get-Navegadores {
+  # Devuelve TODOS los navegadores Chromium instalados, en orden de preferencia.
+  # Cada uno es @{ Exe = <ruta>; Nombre = 'Edge' | 'Chrome' | 'Brave' }.
+  # Los tres aceptan los mismos modificadores (--app, --user-data-dir).
   $candidatos = @()
-  if (${env:ProgramFiles(x86)}) { $candidatos += (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe') }
-  if ($env:ProgramFiles) { $candidatos += (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe') }
-  if ($env:LOCALAPPDATA) { $candidatos += (Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\Application\msedge.exe') }
-  foreach ($ruta in @(
-      'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe',
-      'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe')) {
-    try {
-      $p = (Get-ItemProperty -Path $ruta -ErrorAction Stop).'(default)'
-      if ($p) { $candidatos += $p }
-    } catch { }
+  $familia = @(
+    @{ Nombre = 'Edge'; Rel = 'Microsoft\Edge\Application\msedge.exe' },
+    @{ Nombre = 'Chrome'; Rel = 'Google\Chrome\Application\chrome.exe' },
+    @{ Nombre = 'Brave'; Rel = 'BraveSoftware\Brave-Browser\Application\brave.exe' }
+  )
+  foreach ($f in $familia) {
+    foreach ($base in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, $env:LOCALAPPDATA)) {
+      if ($base) { $candidatos += @{ Exe = (Join-Path $base $f.Rel); Nombre = $f.Nombre } }
+    }
   }
-  foreach ($c in $candidatos) { if ($c -and (Test-Path -LiteralPath $c)) { return $c } }
-  return $null
+  foreach ($par in @(@('msedge.exe', 'Edge'), @('chrome.exe', 'Chrome'), @('brave.exe', 'Brave'))) {
+    foreach ($hive in @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$($par[0])",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$($par[0])")) {
+      try {
+        $p = (Get-ItemProperty -Path $hive -ErrorAction Stop).'(default)'
+        if ($p) { $candidatos += @{ Exe = $p; Nombre = $par[1] } }
+      } catch { }
+    }
+  }
+
+  $instalados = @()
+  foreach ($c in $candidatos) {
+    if (-not $c.Exe -or -not (Test-Path -LiteralPath $c.Exe)) { continue }
+    if ($instalados | Where-Object { $_.Nombre -eq $c.Nombre }) { continue }   # sin repetidos
+    $instalados += $c
+  }
+  return $instalados
+}
+
+function Get-VentanaNavegadorPorTitulo {
+  # HWND de cualquier ventana de navegador con el titulo de la app (modo sin perfil)
+  $pids = @(Get-Process msedge, chrome, brave -ErrorAction SilentlyContinue |
+    ForEach-Object { [int]$_.Id })
+  if ($pids.Count -eq 0) { return [IntPtr]::Zero }
+  $guardado = $script:PerfilNormal
+  $script:PerfilNormal = $true      # reutiliza la busqueda por titulo sobre todos
+  try {
+    return (Get-VentanasSerchTube)
+  } finally {
+    $script:PerfilNormal = $guardado
+  }
 }
 
 function Get-ProcesosSerchTube {
-  # Cualquier Edge abierto con NUESTRO perfil, tenga ventana o no.
-  # Incluir los que aun no tienen ventana es lo que evita abrir un segundo Edge
+  # Cualquier navegador abierto con NUESTRO perfil, tenga ventana o no.
+  # Incluir los que aun no tienen ventana es lo que evita abrir un segundo
   # (el segundo es el que muestra el error del directorio de datos).
   if ($PerfilNormal) { return @() }
   try {
-    return @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction Stop |
-      Where-Object { $_.CommandLine -and $_.CommandLine -like "*$PerfilEdge*" })
+    # Coincidencia EXACTA del perfil: "...\SerchTubeEdge" no debe coincidir con
+    # "...\SerchTubeEdge-Brave" (si no, se confundirian dos navegadores).
+    $patron = [regex]::Escape($PerfilReal) + '([" ]|$)'
+    return @(Get-CimInstance Win32_Process -ErrorAction Stop |
+      Where-Object {
+        $_.Name -in @('msedge.exe', 'chrome.exe', 'brave.exe') -and
+        $_.CommandLine -and $_.CommandLine -like '*--user-data-dir=*' -and
+        $_.CommandLine -match $patron
+      })
   } catch {
     return @()
   }
 }
 
+function Initialize-Ventanas {
+  # Un proceso de navegador puede tener VARIAS ventanas (la de la app, otras del
+  # perfil personal, avisos de traduccion...). MainWindowTitle no sirve: hay que
+  # recorrer las ventanas y buscar la que tiene el titulo de la app.
+  if (-not ('SerchTube.Ventanas' -as [type])) {
+    Add-Type -Namespace 'SerchTube' -Name 'Ventanas' -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, System.IntPtr lParam);
+public delegate bool EnumWindowsProc(System.IntPtr hWnd, System.IntPtr lParam);
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint pid);
+[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(System.IntPtr hWnd, System.Text.StringBuilder t, int n);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+'@
+  }
+}
+
 function Get-VentanasSerchTube {
-  $encontradas = @()
+  # Devuelve el HWND de la ventana de la app ([IntPtr]::Zero si no esta).
+  Initialize-Ventanas
   if ($PerfilNormal) {
-    # Sin perfil dedicado no hay flag en la linea de comandos: se busca por titulo
-    foreach ($wp in @(Get-Process msedge -ErrorAction SilentlyContinue)) {
-      if ($wp.MainWindowHandle -ne 0 -and $wp.MainWindowTitle -like "*$TituloVentana*") { $encontradas += $wp }
+    $pids = @(Get-Process msedge, chrome, brave -ErrorAction SilentlyContinue |
+      ForEach-Object { [int]$_.Id })
+  } else {
+    $pids = @(Get-ProcesosSerchTube | ForEach-Object { [int]$_.ProcessId })
+  }
+  if ($pids.Count -eq 0) { return [IntPtr]::Zero }
+
+  $script:hwndApp = [IntPtr]::Zero
+  $cb = [SerchTube.Ventanas+EnumWindowsProc] {
+    param($h, $l)
+    $pidVentana = [uint32]0
+    [void][SerchTube.Ventanas]::GetWindowThreadProcessId($h, [ref]$pidVentana)
+    if ($pids -contains [int]$pidVentana -and [SerchTube.Ventanas]::IsWindowVisible($h)) {
+      $sb = New-Object System.Text.StringBuilder 512
+      [void][SerchTube.Ventanas]::GetWindowTextW($h, $sb, 512)
+      if ($sb.ToString() -like "*$TituloVentana*") {
+        $script:hwndApp = $h
+        return $false        # encontrada: se corta la enumeracion
+      }
     }
-    return $encontradas
+    return $true
   }
-  foreach ($p in @(Get-ProcesosSerchTube)) {
-    $wp = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
-    if ($wp -and $wp.MainWindowHandle -ne 0) { $encontradas += $wp }
-  }
-  return $encontradas
+  [void][SerchTube.Ventanas]::EnumWindows($cb, [IntPtr]::Zero)
+  return $script:hwndApp
 }
 
 function Set-FocoVentana($Handle) {
   try {
-    if (-not ('SerchTube.Nativo' -as [type])) {
-      Add-Type -Namespace 'SerchTube' -Name 'Nativo' -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
-[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
-'@
-    }
-    [void][SerchTube.Nativo]::ShowWindow($Handle, 9)   # SW_RESTORE
-    [void][SerchTube.Nativo]::SetForegroundWindow($Handle)
+    Initialize-Ventanas
+    [void][SerchTube.Ventanas]::ShowWindow($Handle, 9)   # SW_RESTORE
+    [void][SerchTube.Ventanas]::SetForegroundWindow($Handle)
   } catch { }
 }
 
 function Test-PerfilEscribible {
   try {
-    if (Test-Path -LiteralPath $PerfilEdge -PathType Leaf) {
-      # Hay un ARCHIVO con el nombre del perfil: Edge no puede usarlo
-      $nuevo = Split-Path $PerfilEdge -Leaf
-      Rename-Item -LiteralPath $PerfilEdge -NewName ("$nuevo.archivo-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) -ErrorAction Stop
-      Write-Aviso "Habia un archivo donde debe ir el perfil de Edge; se aparto."
+    if (Test-Path -LiteralPath $PerfilReal -PathType Leaf) {
+      # Hay un ARCHIVO con el nombre del perfil: el navegador no puede usarlo
+      $nuevo = Split-Path $PerfilReal -Leaf
+      Rename-Item -LiteralPath $PerfilReal -NewName ("$nuevo.archivo-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) -ErrorAction Stop
+      Write-Aviso "Habia un archivo donde debe ir el perfil; se aparto."
     }
-    if (-not (Test-Path -LiteralPath $PerfilEdge)) { New-Item -ItemType Directory -Force -Path $PerfilEdge | Out-Null }
-    $prueba = Join-Path $PerfilEdge ('.escritura-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    if (-not (Test-Path -LiteralPath $PerfilReal)) { New-Item -ItemType Directory -Force -Path $PerfilReal | Out-Null }
+    $prueba = Join-Path $PerfilReal ('.escritura-' + [guid]::NewGuid().ToString('N') + '.tmp')
     Set-Content -LiteralPath $prueba -Value 'ok' -Encoding ASCII -ErrorAction Stop
     Remove-Item -LiteralPath $prueba -Force -ErrorAction SilentlyContinue
     return $true
@@ -181,19 +259,19 @@ function Test-PerfilEscribible {
 }
 
 function Reset-PerfilEdge {
-  # Cierra cualquier Edge nuestro y aparta el perfil para que Edge cree uno limpio
+  # Cierra cualquier navegador nuestro y aparta el perfil para que cree uno limpio
   foreach ($p in @(Get-ProcesosSerchTube)) {
     Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
   }
   Start-Sleep -Seconds 2
-  if (Test-Path -LiteralPath $PerfilEdge) {
-    $nombre = Split-Path $PerfilEdge -Leaf
+  if (Test-Path -LiteralPath $PerfilReal) {
+    $nombre = Split-Path $PerfilReal -Leaf
     try {
-      Rename-Item -LiteralPath $PerfilEdge -NewName ("$nombre.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) -ErrorAction Stop
-      Write-Aviso "Perfil de Edge apartado a '$nombre.bak-...' (se creara uno limpio)."
+      Rename-Item -LiteralPath $PerfilReal -NewName ("$nombre.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) -ErrorAction Stop
+      Write-Aviso "Perfil apartado a '$nombre.bak-...' (se creara uno limpio)."
       return $true
     } catch {
-      Write-Aviso "No se pudo apartar el perfil de Edge: $($_.Exception.Message)"
+      Write-Aviso "No se pudo apartar el perfil: $($_.Exception.Message)"
       return $false
     }
   }
@@ -277,13 +355,19 @@ if (-not $TengoElTurno) {
 try {
   # ------------------------------------------------- 1) Reparar perfil y salir
   if ($RepararPerfil) {
+    $cand = $null
+    $inst = @(Get-Navegadores)
+    if ($inst.Count -gt 0) { $cand = $inst[0] }
+    if (-not $PerfilNormal -and $cand -and $cand.Nombre -ne 'Edge') {
+      $PerfilReal = "$PerfilEdge-$($cand.Nombre)"
+    }
     if (Reset-PerfilEdge) {
-      Write-Paso "Perfil de Edge reparado. Vuelve a ejecutar el arranque normal."
+      Write-Paso "Perfil reparado ($PerfilReal). Vuelve a ejecutar el arranque normal."
     }
     exit 0
   }
 
-  if ($PerfilNormal) { Write-Aviso "Modo -PerfilNormal: se usara tu perfil habitual de Edge." }
+  if ($PerfilNormal) { Write-Aviso "Modo -PerfilNormal: se usara el perfil habitual del navegador." }
 
   # ------------------------------------------------- 2) Quitar autoinicio y salir
   if ($QuitarAutoInicio) {
@@ -318,16 +402,27 @@ try {
     $logDir = Join-Path $Raiz 'logs'
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
     $log = Join-Path $logDir 'servidor.log'
-    $comando = '/c npm run dev >> "' + $log + '" 2>&1'
-    Start-Process -FilePath 'cmd.exe' -ArgumentList $comando -WorkingDirectory $Raiz -WindowStyle Hidden
 
-    $limite = (Get-Date).AddSeconds($EsperaServidor)
-    while ((Get-Date) -lt $limite -and -not (Test-Servidor)) { Start-Sleep -Milliseconds 800 }
+    # Se prueban en orden: build de produccion (no necesita herramientas de dev)
+    # y, si no existe, el servidor de desarrollo del proyecto.
+    $arranques = @()
+    if (Test-Path -LiteralPath (Join-Path $Raiz 'dist\server.cjs')) { $arranques += 'node dist\server.cjs' }
+    $arranques += 'npm run dev'
+
+    $topePorIntento = [Math]::Max(20, [int]($EsperaServidor / $arranques.Count))
+    foreach ($metodo in $arranques) {
+      Write-Paso "Iniciando el servidor con: $metodo"
+      Start-Process -FilePath 'cmd.exe' -ArgumentList ('/c ' + $metodo + ' >> "' + $log + '" 2>&1') -WorkingDirectory $Raiz -WindowStyle Hidden
+      $fin = (Get-Date).AddSeconds($topePorIntento)
+      while ((Get-Date) -lt $fin -and -not (Test-Servidor)) { Start-Sleep -Milliseconds 800 }
+      if (Test-Servidor) { break }
+      Write-Aviso "'$metodo' no respondio en $topePorIntento s; se prueba el siguiente metodo."
+    }
 
     if (Test-Servidor) {
       Write-Paso "Servidor listo en $Url."
     } else {
-      Write-Aviso "El servidor no respondio en $EsperaServidor s. Revisa el registro: $log"
+      Write-Aviso "El servidor no respondio. Revisa el registro: $log"
     }
   }
 
@@ -349,45 +444,77 @@ try {
   }
 
   if ($SinNavegador) {
-    Write-Paso "Modo prueba (-SinNavegador): no se abre Edge."
+    Write-Paso "Modo prueba (-SinNavegador): no se abre el navegador."
     exit 0
   }
 
-  # --------------------------------------------------- 6) Ya hay una ventana abierta
+  # ------------------------------------------ 6) Elegir navegador y su perfil
+  # Sirve Edge, Chrome o Brave (los tres son Chromium: mismos modificadores).
+  # Si no hay ninguno, se abre la URL con el navegador predeterminado del sistema.
+  $instalados = @(Get-Navegadores)
+  $nav = $null
+  if ($Navegador -eq 'auto') {
+    if ($instalados.Count -gt 0) { $nav = $instalados[0] }
+  } elseif ($Navegador -ne 'predeterminado') {
+    $nav = $instalados | Where-Object { $_.Nombre.ToLower() -eq $Navegador } | Select-Object -First 1
+    if (-not $nav) {
+      $lista = 'ninguno'
+      if ($instalados.Count -gt 0) { $lista = ($instalados | ForEach-Object { $_.Nombre }) -join ', ' }
+      Write-Aviso "Pediste '$Navegador' y no esta instalado. Instalados: $lista."
+    }
+  }
+
+  if (-not $nav) {
+    # Sin navegador Chromium conocido: se usa el predeterminado del sistema, pero
+    # primero se mira si la app ya esta abierta (para no abrir pestanas de mas).
+    $ya = Get-VentanaNavegadorPorTitulo
+    if ($ya -ne [IntPtr]::Zero) {
+      Write-Paso "Ya hay una ventana de SerchTube abierta. Se trae al frente; no se abre otra."
+      Set-FocoVentana $ya
+      exit 0
+    }
+    Write-Aviso "No hay Edge, Chrome ni Brave: se abre $Url con el navegador predeterminado del sistema."
+    Write-Aviso "En ese modo no puedo garantizar una sola ventana ni el aislamiento del perfil."
+    Start-Process $Url
+    exit 0
+  }
+
+  $usarPerfil = -not $PerfilNormal
+  if ($usarPerfil -and $nav.Nombre -ne 'Edge') {
+    # Cada navegador tiene su propio directorio de datos (no se pueden mezclar)
+    $PerfilReal = "$PerfilEdge-$($nav.Nombre)"
+  }
+  Write-Paso "Navegador: $($nav.Nombre)  ($($nav.Exe))"
+  if ($usarPerfil) { Write-Paso "Perfil dedicado: $PerfilReal" }
+
+  # --------------------------------------------------- 7) Ya hay una ventana abierta
   $procesos = @(Get-ProcesosSerchTube)
   if ($procesos.Count -gt 0) {
-    Write-Paso "Ya hay un Edge de SerchTube abierto ($($procesos.Count) procesos). Esperando su ventana..."
+    Write-Paso "Ya hay un SerchTube abierto en ese perfil ($($procesos.Count) procesos). Esperando su ventana..."
     for ($i = 0; $i -lt 30; $i++) {
-      $ventanas = @(Get-VentanasSerchTube)
-      if ($ventanas.Count -gt 0) {
-        Write-Paso "Ventana encontrada (PID $($ventanas[0].Id)). Se trae al frente; no se abre otra."
-        Set-FocoVentana $ventanas[0].MainWindowHandle
+      $hwnd = Get-VentanasSerchTube
+      if ($hwnd -ne [IntPtr]::Zero) {
+        Write-Paso "Ventana encontrada. Se trae al frente; no se abre otra."
+        Set-FocoVentana $hwnd
         exit 0
       }
       if (@(Get-ProcesosSerchTube).Count -eq 0) { break }   # se cerro solo: seguimos
       Start-Sleep -Seconds 1
     }
     if (@(Get-ProcesosSerchTube).Count -gt 0) {
-      Write-Aviso "El Edge de SerchTube sigue vivo pero sin ventana. NO se abre otro (eso es lo que mostraba el error del directorio de datos)."
-      Write-Aviso "Si no ves la app, ejecuta: 'Reparar perfil de Edge.bat'"
-      exit 0
+      # El navegador quedo vivo pero sin ventana (p. ej. modo segundo plano).
+      # No es un error: al lanzarlo de nuevo, Chromium reutiliza ESE proceso y abre
+      # la ventana, sin competir por el directorio de datos. Solo se evita el
+      # lanzamiento simultaneo (candado) y el perfil ilegible (preflight).
+      Write-Aviso "El navegador sigue vivo sin ventana (segundo plano): se pide abrir la ventana al mismo proceso."
     }
     Write-Paso "El proceso anterior termino; se abre uno nuevo."
   }
 
-  # ------------------------------------------------------------- 7) Abrir Edge
-  $edge = Get-EdgeExe
-  if (-not $edge) {
-    Write-Aviso "No encontre msedge.exe. Abre Edge a mano en $Url"
-    exit 1
-  }
-
-  $usarPerfil = -not $PerfilNormal
-
-  function New-ArgumentosEdge {
+  function New-ArgumentosNavegador {
     $a = @('--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble',
-      '--hide-crash-restore-bubble', '--start-maximized')
-    if ($usarPerfil) { $a = @("--user-data-dir=$PerfilEdge") + $a }
+      '--hide-crash-restore-bubble', '--disable-background-mode', '--start-maximized')
+    if ($usarPerfil) { $a = @("--user-data-dir=`"$PerfilReal`"") + $a }
     if ($Modo -eq 'app') { $a += "--app=$Url" } else { $a += $Url }
     if ($AutoconcederMicro) { $a += '--use-fake-ui-for-media-stream' }
     return $a
@@ -401,30 +528,30 @@ try {
         if (-not $listo) { Start-Sleep -Seconds 2 }
       }
       if (-not $listo) {
-        Write-Aviso "El perfil de Edge no se puede escribir todavia. Se autorepara."
+        Write-Aviso "El perfil no se puede escribir todavia. Se autorepara."
         Reset-PerfilEdge | Out-Null
         if (-not (Test-PerfilEscribible)) {
-          Write-Aviso "Sigue sin poder escribirse el perfil. Usa -PerfilNormal o revisa permisos de $PerfilEdge"
+          Write-Aviso "Sigue sin poder escribirse el perfil. Usa -PerfilNormal o revisa permisos de $PerfilReal"
           exit 1
         }
       }
     }
 
-    Write-Paso "Abriendo Edge (modo '$Modo', intento $intento) con perfil: $(if ($usarPerfil) { $PerfilEdge } else { 'normal (sin --user-data-dir)' })"
-    Start-Process -FilePath $edge -ArgumentList (New-ArgumentosEdge) | Out-Null
+    Write-Paso "Abriendo $($nav.Nombre) (modo '$Modo', intento $intento) con perfil: $(if ($usarPerfil) { $PerfilReal } else { 'normal (sin --user-data-dir)' })"
+    Start-Process -FilePath $nav.Exe -ArgumentList (New-ArgumentosNavegador) | Out-Null
 
-    # Verificar que la ventana aparecio (si Edge se queja del perfil, no aparece)
+    # Verificar que la ventana de la app aparecio (buscando por titulo)
     $aparecio = $false
     for ($i = 0; $i -lt 25; $i++) {
       Start-Sleep -Seconds 1
-      if (@(Get-VentanasSerchTube).Count -gt 0) { $aparecio = $true; break }
+      if ((Get-VentanasSerchTube) -ne [IntPtr]::Zero) { $aparecio = $true; break }
     }
     if ($aparecio) {
       Write-Paso "Listo. Ventana unica de SerchTube abierta."
       exit 0
     }
 
-    Write-Aviso "Edge no mostro la ventana en 25 s."
+    Write-Aviso "$($nav.Nombre) no mostro la ventana en 25 s."
     if ($intento -eq 1 -and $usarPerfil) {
       Write-Aviso "Se autorepara el perfil (se aparta el actual y se crea uno limpio) y se reintenta."
       if (-not (Reset-PerfilEdge)) { Write-Aviso "No se pudo apartar el perfil; se reintenta igual." }
@@ -437,3 +564,4 @@ try {
   if ($TengoElTurno) { try { $Candado.ReleaseMutex() } catch { } }
   $Candado.Dispose()
 }
+
