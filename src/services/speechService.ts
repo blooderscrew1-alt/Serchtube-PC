@@ -619,7 +619,7 @@ export class SpeechService {
           const src = audioCtx.createMediaStreamSource(st);
           src.connect(destination);
         } catch (e) {
-          console.warn(`[SpeechService MultiMic] No se pudo abrir micrófono ${dev.label || dev.deviceId}:`, e);
+          console.warn(`[SpeechService multi-micrófono] No se pudo abrir micrófono ${dev.label || dev.deviceId}:`, e);
         }
       }
 
@@ -629,7 +629,7 @@ export class SpeechService {
 
       return destination.stream;
     } catch (e) {
-      console.warn("[SpeechService MultiMic] Error mixing streams:", e);
+      console.warn("[SpeechService multi-micrófono] Error mixing streams:", e);
       return null;
     }
   }

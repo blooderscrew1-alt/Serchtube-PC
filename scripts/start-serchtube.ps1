@@ -1,21 +1,25 @@
 <#
-  SerchTube Music - Lanzador de arranque en UNA sola ventana de Edge
-  ==================================================================
+  SerchTube Music - Lanzador de arranque en UNA sola ventana del navegador
+  ======================================================================
 
   Que hace:
-    1. Candado: si otro arranque de SerchTube esta en curso, no hace nada.
-       (Dos instancias abriendo el mismo perfil son LA causa del mensaje
-       "no puede leer ni escribir en el directorio de datos".)
+    1. Candado: si otro arranque de SerchTube esta en curso, no hace nada
+       (evita dos instancias peleando por el mismo perfil).
     2. Comprueba si el servidor ya responde en el puerto 3000; si no, lo arranca oculto
        (primero el build de produccion dist\server.cjs, si existe; si no, npm run dev).
-    3. Espera a que el perfil del navegador exista y sea ESCRIBIBLE antes de abrir nada.
-    4. Si ya hay un navegador con nuestro perfil (aunque todavia no tenga ventana),
-       espera a su ventana y la trae al frente: nunca abre un segundo.
-    5. Abre el navegador con perfil dedicado en modo app (una sola ventana, sin pestanas).
-       Sirve Edge o Chrome; si no hay ninguno, abre la URL con el predeterminado.
-    6. Verifica que la ventana aparecio; si no, se autorepara: aparta el perfil
-       dañado y reintenta con uno limpio.
-    7. Registra el arranque automatico de Windows (una sola vez).
+    3. Abre el navegador en modo app con TU PERFIL DE SIEMPRE (por defecto):
+         - funcionan tus EXTENSIONES,
+         - estan tus AJUSTES y tus CLAVES guardadas (localStorage),
+         - el MICROFONO ya no pregunta: el permiso se concede automaticamente
+           (se puede volver al comportamiento normal con -PedirPermisoMicro).
+       Con -Perfil dedicado usa un perfil aparte (modo kiosco, sin extensiones
+       ni datos previos), con preflight del directorio y autoreparacion.
+    4. Si la ventana de la app ya esta abierta, la trae al frente y no abre otra.
+    5. Verifica que la ventana aparecio; si no, lo registra y reintenta una vez.
+    6. Registra el arranque automatico de Windows (una sola vez).
+
+  Pensado para cualquier PC con Windows: no depende de rutas ni de dispositivos
+  concretos. Se puede ajustar todo por parametros.
 
   Pensado para cualquier PC con Windows: no depende de rutas ni de dispositivos
   concretos. Se puede ajustar todo por parametros.
@@ -24,12 +28,11 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-serchtube.ps1
     powershell ... -File scripts\start-serchtube.ps1 -QuitarAutoInicio
     powershell ... -File scripts\start-serchtube.ps1 -SinAutoInicio
-    powershell ... -File scripts\start-serchtube.ps1 -RepararPerfil
-    powershell ... -File scripts\start-serchtube.ps1 -PerfilNormal   (perfil habitual)
     powershell ... -File scripts\start-serchtube.ps1 -Navegador chrome
     powershell ... -File scripts\start-serchtube.ps1 -Modo pestana
     powershell ... -File scripts\start-serchtube.ps1 -SinNavegador
-    powershell ... -File scripts\start-serchtube.ps1 -AutoconcederMicro
+    powershell ... -File scripts\start-serchtube.ps1 -PedirPermisoMicro
+    powershell ... -File scripts\start-serchtube.ps1 -Perfil dedicado -RepararPerfil
 #>
 [CmdletBinding()]
 param(
@@ -39,20 +42,29 @@ param(
 
   [int]$Puerto = 3000,
 
-  # Perfil de Edge exclusivo de SerchTube: aislado de tu sesion normal del navegador
+  # 'normal' (recomendado) = usa TU perfil de siempre: extensiones, ajustes y claves
+  #                          guardadas (localStorage) tal como los tenias.
+  # 'dedicado'             = perfil aparte (kiosco): sin extensiones ni datos previos.
+  [ValidateSet('normal', 'dedicado')]
+  [string]$Perfil = 'normal',
+
+  # Perfil dedicado (solo si $Perfil = 'dedicado')
   [string]$PerfilEdge = (Join-Path $env:LOCALAPPDATA 'SerchTubeEdge'),
 
-  # Usar el perfil normal de Edge (sin --user-data-dir): plan B si el perfil dedicado falla
+  # Alias historico: fuerza el perfil normal
   [switch]$PerfilNormal,
 
   # auto (el que exista: Edge, Chrome o Brave) | edge | chrome | brave | predeterminado
   [ValidateSet('auto', 'edge', 'chrome', 'brave', 'predeterminado')]
   [string]$Navegador = 'auto',
 
-  # Cerrar Edge con nuestro perfil y apartar el perfil (se crea uno limpio)
+  # Cerrar el navegador con nuestro perfil dedicado y apartarlo (se crea uno limpio)
   [switch]$RepararPerfil,
 
-  [switch]$AutoconcederMicro,
+  # Por defecto el micrófono se concede solo (no pregunta en cada arranque).
+  # Con este interruptor se comporta como un navegador normal: pregunta.
+  [switch]$PedirPermisoMicro,
+
   [switch]$SinNavegador,
   [switch]$SinAutoInicio,
   [switch]$QuitarAutoInicio,
@@ -71,8 +83,9 @@ $NombreAutoInicio = 'SerchTube Music'
 $TituloVentana = 'SerchTube Music'
 $VbsSilencioso = Join-Path $PSScriptRoot 'start-serchtube-silencioso.vbs'
 $ClaveRun = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-# Perfil que se usa de verdad. Se calcula al elegir el navegador: cada navegador
-# tiene su propio directorio (Edge mantiene el historico para no perder permisos).
+if ($PerfilNormal) { $Perfil = 'normal' }
+$UsarPerfilDedicado = ($Perfil -eq 'dedicado')
+# Perfil que se usa de verdad (solo en modo dedicado; cada navegador el suyo)
 $PerfilReal = $PerfilEdge
 
 # Contenido del guion silencioso, por si alguien borro el archivo del repo
@@ -152,24 +165,18 @@ function Get-Navegadores {
 }
 
 function Get-VentanaNavegadorPorTitulo {
-  # HWND de cualquier ventana de navegador con el titulo de la app (modo sin perfil)
+  # HWND de cualquier ventana de navegador con el titulo de la app
   $pids = @(Get-Process msedge, chrome, brave -ErrorAction SilentlyContinue |
     ForEach-Object { [int]$_.Id })
   if ($pids.Count -eq 0) { return [IntPtr]::Zero }
-  $guardado = $script:PerfilNormal
-  $script:PerfilNormal = $true      # reutiliza la busqueda por titulo sobre todos
-  try {
-    return (Get-VentanasSerchTube)
-  } finally {
-    $script:PerfilNormal = $guardado
-  }
+  return (BuscarVentanaPorTitulo $pids)
 }
 
 function Get-ProcesosSerchTube {
-  # Cualquier navegador abierto con NUESTRO perfil, tenga ventana o no.
+  # Cualquier navegador abierto con NUESTRO perfil dedicado, tenga ventana o no.
   # Incluir los que aun no tienen ventana es lo que evita abrir un segundo
   # (el segundo es el que muestra el error del directorio de datos).
-  if ($PerfilNormal) { return @() }
+  if (-not $UsarPerfilDedicado) { return @() }
   try {
     # Coincidencia EXACTA del perfil: "...\SerchTubeEdge" no debe coincidir con
     # "...\SerchTubeEdge-Brave" (si no, se confundirian dos navegadores).
@@ -198,30 +205,25 @@ public delegate bool EnumWindowsProc(System.IntPtr hWnd, System.IntPtr lParam);
 [DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+[DllImport("user32.dll")] public static extern bool PostMessage(System.IntPtr hWnd, uint msg, System.IntPtr w, System.IntPtr l);
 '@
   }
 }
 
-function Get-VentanasSerchTube {
-  # Devuelve el HWND de la ventana de la app ([IntPtr]::Zero si no esta).
+function BuscarVentanaPorTitulo([int[]]$Pids) {
+  # HWND de la ventana visible cuyo titulo es EXACTAMENTE el de la app. Se compara
+  # exacto porque una pestaña cualquiera puede tener "SerchTube" en el titulo.
+  if (-not $Pids -or $Pids.Count -eq 0) { return [IntPtr]::Zero }
   Initialize-Ventanas
-  if ($PerfilNormal) {
-    $pids = @(Get-Process msedge, chrome, brave -ErrorAction SilentlyContinue |
-      ForEach-Object { [int]$_.Id })
-  } else {
-    $pids = @(Get-ProcesosSerchTube | ForEach-Object { [int]$_.ProcessId })
-  }
-  if ($pids.Count -eq 0) { return [IntPtr]::Zero }
-
   $script:hwndApp = [IntPtr]::Zero
   $cb = [SerchTube.Ventanas+EnumWindowsProc] {
     param($h, $l)
     $pidVentana = [uint32]0
     [void][SerchTube.Ventanas]::GetWindowThreadProcessId($h, [ref]$pidVentana)
-    if ($pids -contains [int]$pidVentana -and [SerchTube.Ventanas]::IsWindowVisible($h)) {
+    if ($Pids -contains [int]$pidVentana -and [SerchTube.Ventanas]::IsWindowVisible($h)) {
       $sb = New-Object System.Text.StringBuilder 512
       [void][SerchTube.Ventanas]::GetWindowTextW($h, $sb, 512)
-      if ($sb.ToString() -like "*$TituloVentana*") {
+      if ($sb.ToString().Trim() -eq $TituloVentana) {
         $script:hwndApp = $h
         return $false        # encontrada: se corta la enumeracion
       }
@@ -230,6 +232,18 @@ function Get-VentanasSerchTube {
   }
   [void][SerchTube.Ventanas]::EnumWindows($cb, [IntPtr]::Zero)
   return $script:hwndApp
+}
+
+function Get-VentanasSerchTube {
+  # HWND de la ventana de la app ([IntPtr]::Zero si no esta).
+  if ($UsarPerfilDedicado) {
+    $pids = @(Get-ProcesosSerchTube | ForEach-Object { [int]$_.ProcessId })
+  } else {
+    # Perfil normal: se busca en las ventanas del navegador elegido (o de todos)
+    $pids = @(Get-Process msedge, chrome, brave -ErrorAction SilentlyContinue |
+      ForEach-Object { [int]$_.Id })
+  }
+  return (BuscarVentanaPorTitulo $pids)
 }
 
 function Set-FocoVentana($Handle) {
@@ -259,7 +273,18 @@ function Test-PerfilEscribible {
 }
 
 function Reset-PerfilEdge {
-  # Cierra cualquier navegador nuestro y aparta el perfil para que cree uno limpio
+  # Cierra el navegador de NUESTRO perfil dedicado y aparta el perfil.
+  # Primero se le pide a la ventana de la app que se cierre sola (asi guarda sus
+  # preferencias) y solo si no se cierra se fuerza el proceso.
+  $hwnd = Get-VentanasSerchTube
+  if ($hwnd -ne [IntPtr]::Zero) {
+    Initialize-Ventanas
+    [void][SerchTube.Ventanas]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)   # WM_CLOSE
+    for ($i = 0; $i -lt 10; $i++) {
+      Start-Sleep -Milliseconds 500
+      if (@(Get-ProcesosSerchTube).Count -eq 0) { break }
+    }
+  }
   foreach ($p in @(Get-ProcesosSerchTube)) {
     Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
   }
@@ -355,19 +380,21 @@ if (-not $TengoElTurno) {
 try {
   # ------------------------------------------------- 1) Reparar perfil y salir
   if ($RepararPerfil) {
+    if (-not $UsarPerfilDedicado) {
+      Write-Aviso "El modo reparar es para el perfil DEDICADO. Con el perfil normal no hay nada que reparar."
+      exit 0
+    }
     $cand = $null
     $inst = @(Get-Navegadores)
     if ($inst.Count -gt 0) { $cand = $inst[0] }
-    if (-not $PerfilNormal -and $cand -and $cand.Nombre -ne 'Edge') {
+    if ($cand -and $cand.Nombre -ne 'Edge') {
       $PerfilReal = "$PerfilEdge-$($cand.Nombre)"
     }
     if (Reset-PerfilEdge) {
-      Write-Paso "Perfil reparado ($PerfilReal). Vuelve a ejecutar el arranque normal."
+      Write-Paso "Perfil dedicado apartado ($PerfilReal). Vuelve a ejecutar el arranque normal."
     }
     exit 0
   }
-
-  if ($PerfilNormal) { Write-Aviso "Modo -PerfilNormal: se usara el perfil habitual del navegador." }
 
   # ------------------------------------------------- 2) Quitar autoinicio y salir
   if ($QuitarAutoInicio) {
@@ -479,13 +506,17 @@ try {
     exit 0
   }
 
-  $usarPerfil = -not $PerfilNormal
-  if ($usarPerfil -and $nav.Nombre -ne 'Edge') {
+  if ($UsarPerfilDedicado -and $nav.Nombre -ne 'Edge') {
     # Cada navegador tiene su propio directorio de datos (no se pueden mezclar)
     $PerfilReal = "$PerfilEdge-$($nav.Nombre)"
   }
   Write-Paso "Navegador: $($nav.Nombre)  ($($nav.Exe))"
-  if ($usarPerfil) { Write-Paso "Perfil dedicado: $PerfilReal" }
+  if ($UsarPerfilDedicado) {
+    Write-Paso "Perfil dedicado (sin extensiones ni datos previos): $PerfilReal"
+  } else {
+    Write-Paso "Perfil: el tuyo de siempre (extensiones, ajustes y claves guardadas)"
+    if (-not $PedirPermisoMicro) { Write-Paso "Microfono: permiso concedido automaticamente (no preguntara)" }
+  }
 
   # --------------------------------------------------- 7) Ya hay una ventana abierta
   $procesos = @(Get-ProcesosSerchTube)
@@ -504,24 +535,31 @@ try {
     if (@(Get-ProcesosSerchTube).Count -gt 0) {
       # El navegador quedo vivo pero sin ventana (p. ej. modo segundo plano).
       # No es un error: al lanzarlo de nuevo, Chromium reutiliza ESE proceso y abre
-      # la ventana, sin competir por el directorio de datos. Solo se evita el
-      # lanzamiento simultaneo (candado) y el perfil ilegible (preflight).
+      # la ventana, sin competir por el directorio de datos.
       Write-Aviso "El navegador sigue vivo sin ventana (segundo plano): se pide abrir la ventana al mismo proceso."
     }
     Write-Paso "El proceso anterior termino; se abre uno nuevo."
+  } elseif (-not $UsarPerfilDedicado) {
+    # Perfil normal: si la ventana de la app ya esta, no se abre otra
+    $ya = Get-VentanasSerchTube
+    if ($ya -ne [IntPtr]::Zero) {
+      Write-Paso "Ya hay una ventana de SerchTube abierta. Se trae al frente; no se abre otra."
+      Set-FocoVentana $ya
+      exit 0
+    }
   }
 
   function New-ArgumentosNavegador {
     $a = @('--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble',
       '--hide-crash-restore-bubble', '--disable-background-mode', '--start-maximized')
-    if ($usarPerfil) { $a = @("--user-data-dir=`"$PerfilReal`"") + $a }
+    if ($UsarPerfilDedicado) { $a = @("--user-data-dir=`"$PerfilReal`"") + $a }
     if ($Modo -eq 'app') { $a += "--app=$Url" } else { $a += $Url }
-    if ($AutoconcederMicro) { $a += '--use-fake-ui-for-media-stream' }
+    if (-not $PedirPermisoMicro) { $a += '--use-fake-ui-for-media-stream' }
     return $a
   }
 
   for ($intento = 1; $intento -le 2; $intento++) {
-    if ($usarPerfil) {
+    if ($UsarPerfilDedicado) {
       $listo = $false
       for ($i = 0; $i -lt 20 -and -not $listo; $i++) {
         $listo = Test-PerfilEscribible
@@ -531,13 +569,13 @@ try {
         Write-Aviso "El perfil no se puede escribir todavia. Se autorepara."
         Reset-PerfilEdge | Out-Null
         if (-not (Test-PerfilEscribible)) {
-          Write-Aviso "Sigue sin poder escribirse el perfil. Usa -PerfilNormal o revisa permisos de $PerfilReal"
+          Write-Aviso "Sigue sin poder escribirse el perfil. Usa -Perfil normal o revisa permisos de $PerfilReal"
           exit 1
         }
       }
     }
 
-    Write-Paso "Abriendo $($nav.Nombre) (modo '$Modo', intento $intento) con perfil: $(if ($usarPerfil) { $PerfilReal } else { 'normal (sin --user-data-dir)' })"
+    Write-Paso "Abriendo $($nav.Nombre) (modo '$Modo', intento $intento) con perfil: $(if ($UsarPerfilDedicado) { $PerfilReal } else { 'el tuyo de siempre' })"
     Start-Process -FilePath $nav.Exe -ArgumentList (New-ArgumentosNavegador) | Out-Null
 
     # Verificar que la ventana de la app aparecio (buscando por titulo)
@@ -552,7 +590,7 @@ try {
     }
 
     Write-Aviso "$($nav.Nombre) no mostro la ventana en 25 s."
-    if ($intento -eq 1 -and $usarPerfil) {
+    if ($intento -eq 1 -and $UsarPerfilDedicado) {
       Write-Aviso "Se autorepara el perfil (se aparta el actual y se crea uno limpio) y se reintenta."
       if (-not (Reset-PerfilEdge)) { Write-Aviso "No se pudo apartar el perfil; se reintenta igual." }
     }

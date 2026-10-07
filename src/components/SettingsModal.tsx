@@ -71,7 +71,6 @@ import {
   AlertTriangle,
   QrCode,
   Copy,
-  Terminal,
   FileCode
 } from 'lucide-react';
 
@@ -495,9 +494,6 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
   const [isTestingMic, setIsTestingMic] = useState<boolean>(false);
   const [micTestVolume, setMicTestVolume] = useState<number>(0);
   const [micPermissionGranted, setMicPermissionGranted] = useState<boolean>(false);
-  const [multimicMsg, setMultimicMsg] = useState<string | null>(null);
-  const [showPythonScriptModal, setShowPythonScriptModal] = useState<boolean>(false);
-  const [copiedScript, setCopiedScript] = useState<boolean>(false);
   const micTestStreamRef = React.useRef<MediaStream | null>(null);
   const micAudioCtxRef = React.useRef<AudioContext | null>(null);
   const micAnimFrameRef = React.useRef<number | null>(null);
@@ -590,7 +586,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
             const source = audioCtx.createMediaStreamSource(st);
             source.connect(analyser);
           } catch (err) {
-            console.warn(`[MultiMicTest] Error abriendo dispositivo ${dev.label || dev.deviceId}:`, err);
+            console.warn(`[PruebaMic] Error abriendo dispositivo ${dev.label || dev.deviceId}:`, err);
           }
         }
 
@@ -1401,50 +1397,6 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                   {' '}Conecta tus micrófonos y usa aquí el que dejes como predeterminado.
                 </div>
               )}
-
-              {/* Multi-Mic Python Script Helper Banner */}
-              <div className="p-3 rounded-xl bg-gradient-to-r from-red-950/40 via-neutral-900 to-black border border-red-500/30 flex items-center justify-between gap-3 my-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl bg-red-600/20 text-red-400 border border-red-500/40 shrink-0">
-                    <Mic size={16} />
-                  </div>
-                  <div className="text-left">
-                    <span className="text-xs font-bold text-white block">
-                      Monitor Nativo Multi-Mic (Programa Python en Windows)
-                    </span>
-                    <span className="text-[11px] text-gray-400 block">
-                      Escucha y monitorea cada micrófono individualmente con interruptores independientes y medidores dB.
-                    </span>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-1.5 shrink-0">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setMultimicMsg('...');
-                      try {
-                        const r = await fetch('/api/multimic/launch', { method: 'POST' });
-                        const d = await r.json();
-                        setMultimicMsg(r.ok ? (d.already ? '✅ El monitor ya estaba abierto' : '✅ Monitor abierto (ventana aparte)') : `⚠ ${d.error || 'No se pudo abrir'}`);
-                      } catch (_) {
-                        setMultimicMsg('⚠ Servidor no disponible');
-                      }
-                      setTimeout(() => setMultimicMsg(null), 5000);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-green-600/80 hover:bg-green-600 border border-green-400/40 text-xs font-bold text-white transition-colors cursor-pointer"
-                  >
-                    🚀 Abrir / Instalar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowPythonScriptModal(true)}
-                    className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-xs font-bold text-white transition-colors cursor-pointer"
-                  >
-                    Ver Código Python
-                  </button>
-                  {multimicMsg && <span className="text-[10px] text-gray-300 max-w-[180px] text-right">{multimicMsg}</span>}
-                </div>
-              </div>
 
               {!micPermissionGranted && (
                 <div className="flex items-center justify-between p-2.5 rounded-lg bg-amber-950/20 border border-amber-500/30 text-[11px] text-amber-300 animate-fadeIn">
@@ -4186,137 +4138,6 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
         </div>
       </div>
 
-      {/* Python Multi-Mic Script Modal */}
-      {showPythonScriptModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn"
-          onClick={() => setShowPythonScriptModal(false)}
-        >
-          <div
-            className="bg-neutral-950 border border-red-500/40 rounded-3xl p-6 max-w-2xl w-full shadow-[0_0_50px_rgba(220,38,38,0.3)] relative flex flex-col max-h-[85vh] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between pb-4 border-b border-white/10">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-red-600/20 text-red-400 border border-red-500/40">
-                  <Terminal size={20} />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
-                    <span>Multi Mic Monitor (Script Python Windows)</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-red-600/30 text-red-300 border border-red-500/40">
-                      Nativo Windows
-                    </span>
-                  </h3>
-                  <p className="text-xs text-gray-400">Escucha y monitorea todos los micrófonos conectados a tu PC simultáneamente</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowPythonScriptModal(false)}
-                className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-gray-400 hover:text-white transition-colors cursor-pointer"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Subtitle & Instructions */}
-            <div className="py-3 text-xs text-gray-300 space-y-1">
-              <p>Este script en Python te permite monitorear con GUI en tema oscuro todos los micrófonos instalados con vúmetros de decibelios e interruptores independientes para tu PC con Windows.</p>
-              <p className="text-gray-400 text-[11px] font-mono">Ejecuta: <code className="text-amber-300 bg-white/5 px-1.5 py-0.5 rounded">python multi_mic_monitor.py</code></p>
-            </div>
-
-            {/* Code Box */}
-            <div className="flex-1 overflow-y-auto bg-black border border-white/10 rounded-xl p-3 font-mono text-[11px] text-emerald-400 select-all whitespace-pre-wrap leading-relaxed">
-{`"""
-Multi Mic Monitor (tema oscuro) - escucha varios micrófonos a la vez (Windows)
-
-Cada micrófono tiene DOS interruptores independientes:
-  ⏻ Activar    -> abre el micrófono y muestra su medidor SIN que se oiga nada en tus bocinas.
-  🔊 Escuchar  -> envía ese micrófono a tus bocinas/audífonos.
-"""
-
-import importlib, math, subprocess, sys, threading, time, traceback
-import tkinter as tk
-from array import array
-from collections import deque
-from tkinter import messagebox, ttk
-
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
-except Exception:
-    pass
-
-REQUIRED = {"sounddevice": "sounddevice"}
-
-def _check_modules():
-    problems = {}
-    for mod, pkg in REQUIRED.items():
-        try:
-            importlib.import_module(mod)
-        except (ImportError, OSError) as e:
-            problems[pkg] = str(e)
-    return problems
-
-def ensure_dependencies():
-    problems = _check_modules()
-    if not problems:
-        return
-    root = tk.Tk()
-    root.withdraw()
-    pkgs = list(problems)
-    subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", *pkgs])
-    root.destroy()
-
-ensure_dependencies()
-import sounddevice as sd
-
-class Mic:
-    def __init__(self, index: int, info: dict):
-        self.index = index
-        self.info = info
-        self.name = info["name"]
-        self.listening = False
-
-if __name__ == "__main__":
-    print("Multi Mic Monitor nativo para Windows cargado exitosamente.")`}
-            </div>
-
-            {/* Modal Actions */}
-            <div className="pt-4 border-t border-white/10 flex items-center justify-between">
-              <span className="text-[11px] font-mono text-gray-400">SerchTube Multi-Mic Integration</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const code = `import sounddevice as sd...`;
-                    navigator.clipboard.writeText(code);
-                    setCopiedScript(true);
-                    setTimeout(() => setCopiedScript(false), 2000);
-                  }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                    copiedScript
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-red-600 hover:bg-red-500 text-white'
-                  }`}
-                >
-                  {copiedScript ? <Check size={14} /> : <Copy size={14} />}
-                  <span>{copiedScript ? 'Copiado al Portapapeles' : 'Copiar Código Python'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowPythonScriptModal(false)}
-                  className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-colors cursor-pointer"
-                >
-                  Cerrar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
