@@ -129,6 +129,7 @@ $despuesTitulo = ''
 $detras = 0
 $cambiado = $false
 $stasheado = $false
+$depsSaltadas = $false
 $hashPackageAntes = Get-HashArchivo (Join-Path $Raiz 'package.json')
 $hashLockAntes = Get-HashArchivo (Join-Path $Raiz 'package-lock.json')
 
@@ -245,6 +246,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $Raiz 'node_modules'))) {
 
 if ($necesitaNpm -and $SinDependencias) {
   Write-Aviso "Cambiaron las dependencias pero pediste -SinDependencias: ejecuta 'npm install' a mano."
+  $depsSaltadas = $true
   $necesitaNpm = $false
 }
 if ($necesitaNpm) {
@@ -279,7 +281,7 @@ Write-Host ""
 Write-Host "================ RESUMEN ================" -ForegroundColor Green
 Write-Host " Version anterior : $antes $(if ($antesTitulo) { "- $antesTitulo" })"
 Write-Host " Version nueva    : $despues $(if ($despuesTitulo) { "- $despuesTitulo" })"
-Write-Host " Dependencias     : $(if ($necesitaNpm) { 'instaladas ahora' } else { 'sin cambios' })"
+Write-Host " Dependencias     : $(if ($necesitaNpm) { 'instaladas ahora' } elseif ($depsSaltadas) { 'cambiaron (no instaladas por -SinDependencias)' } else { 'sin cambios' })"
 Write-Host " Servidor         : $(if ($SinReiniciar) { 'sin tocar' } elseif (@(Get-ServidorPid).Count -gt 0) { 'corriendo' } else { 'detenido' })"
 Write-Host " .env, logs y node_modules no se tocaron."
 if ($stasheado) {
