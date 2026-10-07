@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "iniciar": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-serchtube.ps1",
+    "actualizar": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update-serchtube.ps1",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
