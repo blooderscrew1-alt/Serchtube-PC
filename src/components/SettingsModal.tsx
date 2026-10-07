@@ -537,14 +537,6 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
       cancelAnimationFrame(micAnimFrameRef.current);
       micAnimFrameRef.current = null;
     }
-    if ((micTestStreamRef as any).multiStreams) {
-      try {
-        ((micTestStreamRef as any).multiStreams as MediaStream[]).forEach(st => {
-          st.getTracks().forEach(t => t.stop());
-        });
-      } catch (_) {}
-      (micTestStreamRef as any).multiStreams = null;
-    }
     if (micTestStreamRef.current) {
       micTestStreamRef.current.getTracks().forEach(t => t.stop());
       micTestStreamRef.current = null;
@@ -572,47 +564,16 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
       analyser.fftSize = 128;
       analyser.smoothingTimeConstant = 0.3;
 
-      if (targetDev === 'all' || targetDev === 'todos') {
-        const devices = audioInputDevices.length > 0
-          ? audioInputDevices
-          : (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+      const audioConstraints = (targetDev && targetDev !== 'default')
+        ? { deviceId: { exact: targetDev } }
+        : true;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      micTestStreamRef.current = stream;
+      setMicPermissionGranted(true);
+      await loadAudioInputDevices();
 
-        const multiStreams: MediaStream[] = [];
-        for (const dev of devices) {
-          if (!dev.deviceId) continue;
-          try {
-            const st = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: dev.deviceId } } });
-            multiStreams.push(st);
-            const source = audioCtx.createMediaStreamSource(st);
-            source.connect(analyser);
-          } catch (err) {
-            console.warn(`[PruebaMic] Error abriendo dispositivo ${dev.label || dev.deviceId}:`, err);
-          }
-        }
-
-        if (multiStreams.length === 0) {
-          const defaultStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          multiStreams.push(defaultStream);
-          const source = audioCtx.createMediaStreamSource(defaultStream);
-          source.connect(analyser);
-        }
-
-        micTestStreamRef.current = multiStreams[0];
-        (micTestStreamRef as any).multiStreams = multiStreams;
-        setMicPermissionGranted(true);
-        await loadAudioInputDevices();
-      } else {
-        const audioConstraints = (targetDev && targetDev !== 'default')
-          ? { deviceId: { exact: targetDev } }
-          : true;
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
-        micTestStreamRef.current = stream;
-        setMicPermissionGranted(true);
-        await loadAudioInputDevices();
-
-        const source = audioCtx.createMediaStreamSource(stream);
-        source.connect(analyser);
-      }
+      const source = audioCtx.createMediaStreamSource(stream);
+      source.connect(analyser);
 
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       const loop = () => {
@@ -1320,20 +1281,12 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
             title="Micrófono de Entrada (Hardware)"
             icon={<Mic size={16} />}
             summary={
-              speechConfig.audioInputDeviceId === 'all'
-                ? "🎙️ Todos (Mezcla de todos los micrófonos conectados en simultáneo) • Calibración y Vúmetro dB"
-                : `${audioInputDevices.find(d => d.deviceId === speechConfig.audioInputDeviceId)?.label || 'Micrófono por defecto del sistema'} • Vúmetro en tiempo real y selector`
+              `${audioInputDevices.find(d => d.deviceId === speechConfig.audioInputDeviceId)?.label || 'Micrófono por defecto del sistema'} • Vúmetro en tiempo real y selector`
             }
             badge={
-              speechConfig.audioInputDeviceId === 'all' ? (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono border border-amber-500/30 font-bold">
-                  TODOS (MULTI-MIC)
-                </span>
-              ) : (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-300 font-mono">
-                  {audioInputDevices.length > 0 ? `${audioInputDevices.length} detectados` : 'Por defecto'}
-                </span>
-              )
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-300 font-mono">
+                {audioInputDevices.length > 0 ? `${audioInputDevices.length} detectados` : 'Por defecto'}
+              </span>
             }
             isExpanded={!!expandedSections['audio_input']}
             onToggle={() => toggleSection('audio_input')}
@@ -1371,9 +1324,6 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                   <option value="default" className="bg-neutral-900 text-white">
                     🎙️ Micrófono por defecto del sistema
                   </option>
-                  <option value="all" className="bg-neutral-900 text-amber-300 font-bold">
-                    🎙️ Todos (Mezcla Multi-Mic de todos los micrófonos conectados)
-                  </option>
                   {audioInputDevices.map((dev, idx) => {
                     const label = dev.label || `Micrófono ${idx + 1} (${dev.deviceId ? dev.deviceId.slice(0, 8) : 'Hardware'}...)`;
                     return (
@@ -1386,15 +1336,12 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
               </div>
 
               {/* Aviso honesto: la Web Speech API del navegador siempre escucha el micrófono
-                  predeterminado de Windows; la mezcla multi-mic solo aplica al vúmetro/prueba */}
-              {(speechConfig.audioInputDeviceId === 'all' || (speechConfig.audioInputDeviceId && speechConfig.audioInputDeviceId !== 'default')) && (
+                  predeterminado de Windows, elija lo que elija este selector */}
+              {(speechConfig.audioInputDeviceId && speechConfig.audioInputDeviceId !== 'default') && (
                 <div className="p-2.5 rounded-lg bg-sky-950/30 border border-sky-500/30 text-[11px] text-sky-200 animate-fadeIn">
                   <span className="font-bold block mb-0.5">ℹ️ Cómo escucha de verdad el asistente</span>
                   El motor de voz del navegador siempre escucha el <b>micrófono predeterminado de Windows</b> (limitación del navegador, no de SerchTube).
-                  {speechConfig.audioInputDeviceId === 'all'
-                    ? ' La opción "Todos" mezcla los micrófonos solo para el vúmetro y las pruebas de esta pantalla.'
-                    : ' Para que el asistente escuche el micrófono elegido, configúralo como predeterminado en Windows: Configuración → Sistema → Sonido → Entrada.'}
-                  {' '}Conecta tus micrófonos y usa aquí el que dejes como predeterminado.
+                  {' '}Este selector solo cambia el dispositivo del <b>vúmetro y las pruebas</b>: para que el asistente use otro micrófono, dejalo como predeterminado en Windows (Configuración → Sistema → Sonido → Entrada).
                 </div>
               )}
 

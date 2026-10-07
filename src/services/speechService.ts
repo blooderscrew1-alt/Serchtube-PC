@@ -327,22 +327,7 @@ export class SpeechService {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return false;
     try {
       const chosenDevice = deviceId || this.config.audioInputDeviceId;
-      if (chosenDevice === 'all' || chosenDevice === 'todos') {
-        const devices = await this.getAudioInputDevices();
-        if (devices.length > 0) {
-          let anyOk = false;
-          for (const dev of devices) {
-            if (!dev.deviceId) continue;
-            try {
-              const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: dev.deviceId } } });
-              stream.getTracks().forEach(t => t.stop());
-              anyOk = true;
-            } catch (_) {}
-          }
-          if (anyOk) return true;
-        }
-      }
-      const audioConstraint = (chosenDevice && chosenDevice !== 'default' && chosenDevice !== 'all' && chosenDevice !== 'todos')
+      const audioConstraint = (chosenDevice && chosenDevice !== 'default')
         ? { deviceId: { exact: chosenDevice } }
         : true;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint });
@@ -565,22 +550,7 @@ export class SpeechService {
     }
     try {
       const chosenDevice = deviceId || this.config.audioInputDeviceId;
-      if (chosenDevice === 'all' || chosenDevice === 'todos') {
-        const devices = await this.getAudioInputDevices();
-        if (devices.length > 0) {
-          let anyOk = false;
-          for (const dev of devices) {
-            if (!dev.deviceId) continue;
-            try {
-              const st = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: dev.deviceId } } });
-              st.getTracks().forEach(t => t.stop());
-              anyOk = true;
-            } catch (_) {}
-          }
-          if (anyOk) return { granted: true };
-        }
-      }
-      const audioConstraint = (chosenDevice && chosenDevice !== 'default' && chosenDevice !== 'all' && chosenDevice !== 'todos')
+      const audioConstraint = (chosenDevice && chosenDevice !== 'default')
         ? { deviceId: { exact: chosenDevice } }
         : true;
       const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint });
@@ -590,47 +560,6 @@ export class SpeechService {
     } catch (err: any) {
       console.warn("Microphone permission prompt error:", err);
       return { granted: false, error: err?.message || 'Permiso denegado por el usuario o navegador' };
-    }
-  }
-
-  /**
-   * Genera un MediaStream mezclado con TODOS los micrófonos conectados en tiempo real
-   */
-  public async getMixedMicStream(): Promise<MediaStream | null> {
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return null;
-    try {
-      const devices = await this.getAudioInputDevices();
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtxClass || devices.length === 0) {
-        return await navigator.mediaDevices.getUserMedia({ audio: true });
-      }
-
-      const audioCtx = new AudioCtxClass();
-      const destination = audioCtx.createMediaStreamDestination();
-      const activeStreams: MediaStream[] = [];
-
-      for (const dev of devices) {
-        if (!dev.deviceId) continue;
-        try {
-          const st = await navigator.mediaDevices.getUserMedia({
-            audio: { deviceId: { exact: dev.deviceId } }
-          });
-          activeStreams.push(st);
-          const src = audioCtx.createMediaStreamSource(st);
-          src.connect(destination);
-        } catch (e) {
-          console.warn(`[SpeechService multi-micrófono] No se pudo abrir micrófono ${dev.label || dev.deviceId}:`, e);
-        }
-      }
-
-      if (activeStreams.length === 0) {
-        return await navigator.mediaDevices.getUserMedia({ audio: true });
-      }
-
-      return destination.stream;
-    } catch (e) {
-      console.warn("[SpeechService multi-micrófono] Error mixing streams:", e);
-      return null;
     }
   }
 

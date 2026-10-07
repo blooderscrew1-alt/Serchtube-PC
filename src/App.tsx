@@ -462,7 +462,13 @@ export default function App() {
     try {
       const saved = localStorage.getItem('serchtube_speech_config');
       if (saved) {
-        return { ...defaultConfig, ...JSON.parse(saved) };
+        const cfg: SpeechConfig = { ...defaultConfig, ...JSON.parse(saved) };
+        // La opción "Todos (Multi-Mic)" ya no existe: si quedó guardada, se pasa al
+        // micrófono predeterminado del sistema (que es el que usa el motor de voz).
+        if (cfg.audioInputDeviceId === 'all' || cfg.audioInputDeviceId === 'todos') {
+          cfg.audioInputDeviceId = 'default';
+        }
+        return cfg;
       }
     } catch (e) {}
     return defaultConfig;
