@@ -19,6 +19,37 @@ View your app in AI Studio: https://ai.studio/apps/0c647d84-b0f4-46e5-afaa-4f301
 3. Run the app:
    `npm run dev`
 
+## Actualizar a la última versión (un clic)
+
+No hace falta volver a descargar el proyecto ni reinstalar nada: esta carpeta ya
+es un clon de git, y las actualizaciones se aplican encima.
+
+- Doble clic en `Actualizar SerchTube.bat`, o
+- `npm run actualizar`, o
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\update-serchtube.ps1`
+
+Qué hace ([scripts/update-serchtube.ps1](scripts/update-serchtube.ps1)):
+
+1. Trae **solo lo que cambió** (`git fetch` + `git pull`): no vuelve a bajar todo.
+2. Ejecuta `npm install` **únicamente** si cambió `package.json` /
+   `package-lock.json` / `bun.lock` o si falta `node_modules`. Si no, no pierde tiempo.
+3. **Reinicia el servidor** (detecta el que escucha en el puerto) para que tome el
+   código nuevo; si estaba apagado, lo arranca.
+4. Muestra un resumen: versión anterior → nueva, dependencias y estado del servidor.
+
+No toca tus claves (`.env`), tus registros (`logs/`) ni `node_modules/`.
+
+Opciones: `-SinReiniciar`, `-Reiniciar` (forzar reinicio aunque no haya cambios),
+`-Forzar` (descarta cambios locales), `-SinDependencias`, `-Rama <rama>`.
+
+- Si tenés cambios locales sin guardar, los guarda en `git stash` y te indica cómo
+  recuperarlos (`git stash pop`).
+- Si la carpeta **no** es un repositorio git (la bajaste como ZIP), **no hace falta
+  Git**: el script descarga el ZIP de la rama y copia encima conservando
+  `node_modules`, `.env` y `logs`. Para pasar al modo git (más rápido y permite
+  `-Forzar`), cloná una vez y copiá tu `.env`:
+  `git clone https://github.com/blooderscrew1-alt/Serchtube-PC.git serchtube`
+
 ## Arranque en una sola ventana (Windows)
 
 Al encender la PC, el navegador puede restaurar las pestañas de la sesión anterior
