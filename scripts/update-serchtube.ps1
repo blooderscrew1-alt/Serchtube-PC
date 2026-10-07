@@ -43,7 +43,10 @@ param(
   [switch]$Reiniciar,
 
   # No ejecutar npm install aunque hayan cambiado las dependencias
-  [switch]$SinDependencias
+  [switch]$SinDependencias,
+
+  # Instalar lo que falte (Node.js / Git) con winget si es posible
+  [switch]$InstalarRequisitos
 )
 
 $ErrorActionPreference = 'Stop'
@@ -113,6 +116,49 @@ function Get-HashArchivo([string]$ruta) {
   return (Get-FileHash -LiteralPath $ruta -Algorithm SHA256).Hash
 }
 
+function Instalar-ConWinget([string]$id, [string]$nombre) {
+  if (-not (Test-Comando 'winget')) { return $false }
+  Write-Paso "Instalando $nombre con winget ($id)..."
+  try {
+    & winget install --id $id -e --accept-source-agreements --accept-package-agreements --silent
+  } catch {
+    Write-Aviso "winget no pudo instalar $nombre."
+    return $false
+  }
+  $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
+              [System.Environment]::GetEnvironmentVariable('Path', 'User')
+  return $true
+}
+
+function Comprobar-Requisitos {
+  # Node.js (obligatorio para correr/actualizar) y Git (opcional: sin el se usa el ZIP)
+  $faltan = @()
+  if (-not (Test-Comando 'node') -or -not (Test-Comando 'npm')) {
+    $faltan += @{ Nombre = 'Node.js (incluye npm)'; Id = 'OpenJS.NodeJS.LTS'; Url = 'https://nodejs.org' }
+  }
+  if (-not (Test-Comando 'git')) {
+    $faltan += @{ Nombre = 'Git'; Id = 'Git.Git'; Url = 'https://git-scm.com/download/win' }
+  }
+  if ($faltan.Count -eq 0) {
+    Write-Paso "Requisitos OK (node, npm, git)."
+    return
+  }
+  foreach ($f in $faltan) { Write-Aviso "Falta $($f.Nombre)  ->  $($f.Url)" }
+  if ($InstalarRequisitos) {
+    foreach ($f in $faltan) { Instalar-ConWinget $f.Id $f.Nombre | Out-Null }
+    $siguen = @()
+    if (-not (Test-Comando 'node') -or -not (Test-Comando 'npm')) { $siguen += 'Node.js' }
+    if (-not (Test-Comando 'git')) { $siguen += 'Git' }
+    if ($siguen.Count -gt 0) {
+      Write-Aviso "Todavia faltan: $($siguen -join ', '). Cierra esta ventana, volve a abrirla y ejecuta de nuevo."
+    } else {
+      Write-Paso "Requisitos instalados."
+    }
+  } elseif (Test-Comando 'winget') {
+    Write-Paso "Puedo instalarlos yo: volve a ejecutar con -InstalarRequisitos"
+  }
+}
+
 # ------------------------------------------------------------------ 0) Entorno
 Write-Paso "Proyecto: $Raiz"
 if (-not (Test-Path -LiteralPath (Join-Path $Raiz 'package.json')) -or
@@ -122,6 +168,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $Raiz 'package.json')) -or
 }
 
 $esRepo = Test-Path -LiteralPath (Join-Path $Raiz '.git')
+
+# ------------------------------------------- 0b) Requisitos (sirve en PC nuevas)
+Comprobar-Requisitos
+
 $antes = ''
 $despues = ''
 $antesTitulo = ''

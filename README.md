@@ -19,6 +19,33 @@ View your app in AI Studio: https://ai.studio/apps/0c647d84-b0f4-46e5-afaa-4f301
 3. Run the app:
    `npm run dev`
 
+## Instalar en otra PC (una sola vez)
+
+Todo el proyecto es **agnóstico del equipo**: no hay rutas, usuarios ni dispositivos
+fijos, y los scripts de arranque/actualización hablan solo con GitHub (no con la PC
+donde se desarrolló).
+
+Requisitos de esa PC: **Node.js** (obligatorio) e **Internet**. Git es **opcional**
+(sin Git, el actualizador baja el ZIP de la rama; con Git la actualización es más
+rápida y en un solo paso).
+
+1. Traé el proyecto una vez:
+   - con Git: `git clone https://github.com/blooderscrew1-alt/SerchTube-PC.git serchtube`
+   - o descargá el ZIP de la rama y descomprimilo.
+2. (Opcional) copiá tu `.env` si querés las mismas claves; si no, la app restaura las
+   claves guardadas en el navegador de ese equipo.
+3. Doble clic en **`Instalar en esta PC.bat`** (`scripts/install-serchtube.ps1`):
+   comprueba Node.js/Git, crea el `.env` si falta, instala dependencias, registra el
+   arranque automático y abre SerchTube.
+
+Después, en esa PC, para actualizar: **`Actualizar SerchTube.bat`**.
+Si falta Node.js o Git, el script lo avisa y podés dejarlo instalar con
+`-InstalarRequisitos` (usa winget).
+
+Lo que **no** viaja entre PCs (es lo esperable): `node_modules/`, tus claves
+(`.env`), los registros (`logs/`) y el perfil del navegador (extensiones, ajustes y
+claves guardadas en `localStorage` son de cada equipo).
+
 ## Actualizar a la última versión (un clic)
 
 No hace falta volver a descargar el proyecto ni reinstalar nada: esta carpeta ya
