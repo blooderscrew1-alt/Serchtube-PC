@@ -41,6 +41,21 @@ if errorlevel 1 (
 )
 echo  [OK] sounddevice listo.
 
+rem 2b) Librerias para minimizar a la BANDEJA del sistema (junto al reloj)
+echo  [..] Verificando librerias de bandeja (pystray, pillow)...
+%PYEXE% -c "import pystray, PIL" >nul 2>&1
+if errorlevel 1 (
+    echo  [..] Instalando pystray y pillow...
+    %PYEXE% -m pip install --upgrade pystray pillow
+)
+%PYEXE% -c "import pystray, PIL" >nul 2>&1
+if errorlevel 1 (
+    echo  [i] Sin pystray/pillow: el programa funciona igual, pero el boton
+    echo      minimizar usara la barra de tareas en vez de la bandeja.
+) else (
+    echo  [OK] Bandeja del sistema lista.
+)
+
 rem 3) Crear acceso directo en el Escritorio (solo si no existe)
 set "PYW="
 for /f "delims=" %%P in ('%PYEXE% -c "import sys,os;print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do set "PYW=%%P"

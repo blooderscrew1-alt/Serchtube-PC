@@ -14,7 +14,7 @@
     5. Abre el navegador con perfil dedicado en modo app (una sola ventana, sin pestanas).
        Sirve Edge o Chrome; si no hay ninguno, abre la URL con el predeterminado.
     6. Verifica que la ventana aparecio; si no, se autorepara: aparta el perfil
-       daÃ±ado y reintenta con uno limpio.
+       dañado y reintenta con uno limpio.
     7. Registra el arranque automatico de Windows (una sola vez).
 
   Pensado para cualquier PC con Windows: no depende de rutas ni de dispositivos

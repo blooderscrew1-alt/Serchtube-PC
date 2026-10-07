@@ -99,6 +99,11 @@ micrófonos ahí dejaba *streams* abiertos sin datos y el watchdog los reabría 
 sin volumen hasta reiniciar la PC**. Ahora:
 
 - Espera a que la lista de entradas esté **estable** (y a que `explorer` exista).
+- **Espera a que SerchTube esté listo** (solo si "Iniciar con Windows" está activo):
+  sondea `/api/health` verificando la identidad del servidor y espera a que la
+  ventana "SerchTube Music" esté dibujada; después espera **15 s** (máximo 30 s,
+  configurable) y recién entonces abre los micrófonos. Si SerchTube no aparece,
+  sigue igual después del tope (`seg_espera_serchtube`, 120 s por defecto).
 - **Calienta** el motor de audio antes de abrir nada.
 - Abre los micrófonos **de a uno**, comprobando que entregan datos antes de seguir.
 - **No abre dispositivos virtuales** (Steam Streaming, VB-Cable, Voicemeeter…) en
@@ -114,6 +119,19 @@ sin volumen hasta reiniciar la PC**. Ahora:
 
 Herramientas de recuperación (no hace falta reiniciar la PC):
 
+- `⚙ Autoconfigurar` (botón nuevo): deja todo listo para captar **todos** los
+  micrófonos conectados:
+  1. elige la salida de mezcla (`CABLE Input` de VB-Cable si está instalado),
+  2. marca los micrófonos **reales** para iniciar al abrir, al 100 % y sin "Escuchar",
+  3. deja los dispositivos **virtuales** sin abrir solos,
+  4. pone `CABLE Output` como **micrófono predeterminado de Windows** en los tres
+     roles (consola/multimedia/comunicaciones) usando `IPolicyConfig` en un proceso
+     aparte, así un fallo de esa API no afecta a la ventana; si Windows no lo permite,
+     muestra el paso a paso manual.
+- **Minimizar a la bandeja**: el botón minimizar manda el programa junto al reloj
+  (no a la barra de tareas). El icono tiene menú *Mostrar / Ocultar / Salir* y doble
+  clic para volver. Usa `pystray` + `Pillow`, que se instalan solos (con diálogo en
+  uso normal, en segundo plano si lo lanzó Windows).
 - `🛠 Reparar audio` (dentro de la app) o `herramientas/multimic/Reparar audio de Windows.bat`:
   reinicia el servicio de audio de Windows (pide administrador).
 - `MultiMicMonitor.py --autotest`: prueba sin interfaz que los micrófonos
@@ -139,6 +157,8 @@ equipo de desarrollo solo se usó para probarlo. Cómo validar cada PC objetivo:
    |---|---|
    | `virtual_extra: ["mi_dsp", …]` | reconocer como virtuales dispositivos con otros nombres (por defecto: Steam Streaming, VB-Cable, Voicemeeter, OBS, NVIDIA Broadcast, Sound Mapper, Stereo Mix…) |
    | `abrir_virtuales: true` | abrirlos igual al iniciar con Windows |
+   | `esperar_serchtube` / `seg_espera_serchtube` / `retardo_tras_serchtube` | esperar a SerchTube antes de abrir los micrófonos (el retardo se recorta a 30 s) |
+   | `puerto_serchtube` | puerto donde escucha SerchTube (3000 por defecto) |
    | `seg_espera_audio`, `seg_comprobar_datos`, `intentos_comprobar` | equipos lentos o rápidos |
    | `max_fallos`, `seg_modo_seguro`, `dias_cuarentena` | agresividad del aislamiento |
 

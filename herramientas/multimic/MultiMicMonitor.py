@@ -1,39 +1,50 @@
-﻿"""
-Multi Mic Monitor (tema oscuro) - escucha varios micrÃ³fonos a la vez (Windows)
+"""
+Multi Mic Monitor (tema oscuro) - escucha varios micrófonos a la vez (Windows)
 
-Cada micrÃ³fono tiene DOS interruptores independientes:
-  â» Activar    -> abre el micrÃ³fono y muestra su medidor (para comprobar que
+Cada micrófono tiene DOS interruptores independientes:
+  ⏻ Activar    -> abre el micrófono y muestra su medidor (para comprobar que
                   funciona) SIN que se oiga nada en tus bocinas.
-  ðŸ”Š Escuchar  -> envÃ­a ese micrÃ³fono a tus bocinas/audÃ­fonos.
+  🔊 Escuchar  -> envía ese micrófono a tus bocinas/audífonos.
 
 Todo empieza apagado y silenciado. No se graba nada.
-Esta versiÃ³n no usa numpy (solo sounddevice).
+Esta versión no usa numpy (solo sounddevice).
 
 Uso:
     python multi_mic_monitor.py
     python multi_mic_monitor.py --diagnostico [--sondas]      (informe del equipo)
     python multi_mic_monitor.py --autotest [--con-virtuales]  (prueba sin interfaz)
+    python multi_mic_monitor.py --set-default-capture "CABLE Output"   (uso interno)
+
+Botones de la ventana:
+    ⚙ Autoconfigurar  deja todo listo para captar TODOS los micrófonos: salida de mezcla
+                      (CABLE Input), micrófonos reales al 100%, virtuales sin abrir solos y
+                      "CABLE Output" como micrófono predeterminado de Windows.
+    🛠 Reparar audio   reinicia el servicio de audio de Windows si algo quedó atascado.
+    Minimizar          el botón de minimizar manda el programa a la BANDEJA del sistema
+                      (junto al reloj), no a la barra de tareas (usa pystray + Pillow,
+                      que se instalan solos si hace falta).
 
 Para desplegar en OTRA PC:
-    1. EjecutÃ¡  python MultiMicMonitor.py --diagnostico --sondas  en ese equipo.
-    2. MandÃ¡ el informe que guarda en %APPDATA%\\MultiMicMonitor\\.
-    3. Si algÃºn dispositivo virtual tiene otro nombre, agregalo en config.json:
+    1. Ejecutá  python MultiMicMonitor.py --diagnostico --sondas  en ese equipo.
+    2. Mandá el informe que guarda en %APPDATA%\\MultiMicMonitor\\.
+    3. Si algún dispositivo virtual tiene otro nombre, agregalo en config.json:
          "virtual_extra": ["mi_dsp", "loopback focusrite"]
-       y ajustÃ¡ los tiempos si ese equipo es mÃ¡s lento (ver AJUSTES_POR_DEFECTO).
-    Todo lo demÃ¡s (abrir de a uno, comprobar datos, cuarentena, modo seguro) es
-    independiente del equipo y no necesita configuraciÃ³n.
+       y ajustá los tiempos si ese equipo es más lento (ver AJUSTES_POR_DEFECTO).
+    Todo lo demás (abrir de a uno, comprobar datos, cuarentena, modo seguro) es
+    independiente del equipo y no necesita configuración.
 
-Arranque con Windows (--inicio lo pone la clave Run):
-    * Espera a que Windows termine de cargar el audio (lista de entradas estable).
-    * "Calienta" el motor de audio antes de abrir los micrÃ³fonos.
-    * Abre los micrÃ³fonos DE A UNO y comprueba que entregan datos antes de seguir.
-    * NO abre dispositivos virtuales/de streaming (Steam, VB-Cable, Voicemeeterâ€¦)
+Arranque con Windows (--inicio lo pone la clave Run), solo si "Iniciar con Windows" está activo:
+    * Espera a que SerchTube esté LISTO (servidor /api/health + ventana dibujada) y recién
+      ahí continúa; después de verlo listo espera 15 s (máximo 30 s, configurable).
+    * "Calienta" el motor de audio antes de abrir los micrófonos.
+    * Abre los micrófonos DE A UNO y comprueba que entregan datos antes de seguir.
+    * NO abre dispositivos virtuales/de streaming (Steam, VB-Cable, Voicemeeter…)
       salvo que marques "Abrir dispositivos virtuales al iniciar con Windows".
     * Un dispositivo que falla varias veces queda AISLADO: no se vuelve a abrir solo.
-    * Si varios micrÃ³fonos se quedan sin datos a la vez, entra en MODO SEGURO
+    * Si varios micrófonos se quedan sin datos a la vez, entra en MODO SEGURO
       (cierra todo, espera y reabre de a uno) en vez de martillar el dispositivo.
-    * BotÃ³n "ðŸ›  Reparar audio": reinicia el servicio de audio de Windows sin
-      reiniciar la PC (tambiÃ©n estÃ¡ en "Reparar audio de Windows.bat").
+    * Botón "🛠 Reparar audio": reinicia el servicio de audio de Windows sin
+      reiniciar la PC (también está en "Reparar audio de Windows.bat").
 
 Todo queda registrado en %APPDATA%\\MultiMicMonitor\\multimic.log
 """
@@ -52,20 +63,22 @@ from array import array
 from collections import deque
 from tkinter import messagebox, ttk
 
-try:  # texto nÃ­tido en pantallas con escalado
+try:  # texto nítido en pantallas con escalado
     import ctypes
     ctypes.windll.shcore.SetProcessDpiAwareness(1)
 except Exception:
     pass
 
-# mÃ³dulo -> paquete de pip
+# módulo -> paquete de pip
 REQUIRED = {"sounddevice": "sounddevice"}
+# Opcionales: solo hacen falta para minimizar a la bandeja del sistema.
+OPTIONAL = {"pystray": "pystray", "PIL": "pillow"}
 
 
-def _check_modules() -> dict:
+def _check_modules(mapa=None) -> dict:
     """Devuelve {paquete: error} de lo que no se puede importar."""
     problems = {}
-    for mod, pkg in REQUIRED.items():
+    for mod, pkg in (mapa or REQUIRED).items():
         try:
             importlib.import_module(mod)
         except (ImportError, OSError) as e:
@@ -73,8 +86,51 @@ def _check_modules() -> dict:
     return problems
 
 
+def opcionales_disponibles() -> bool:
+    """True si se puede usar la bandeja del sistema (pystray + Pillow)."""
+    return not _check_modules(OPTIONAL)
+
+
+def instalar_opcionales_silencioso():
+    """Instala pystray/Pillow sin molestar (pensado para el arranque con Windows)."""
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", *OPTIONAL.values()],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), timeout=240,
+        )
+        if opcionales_disponibles():
+            _log("Bandeja del sistema: dependencias instaladas (se usaran en el proximo arranque).")
+    except Exception as e:
+        _log(f"Bandeja del sistema: no se pudieron instalar las dependencias ({e}).")
+
+
+def ensure_opcionales(interactivo: bool) -> bool:
+    """Asegura pystray/Pillow. Si faltan: pregunta (uso normal) o los instala en
+    segundo plano sin diálogos (cuando lo lanza Windows al iniciar sesión)."""
+    if opcionales_disponibles():
+        return True
+    if not interactivo:
+        threading.Thread(target=instalar_opcionales_silencioso, daemon=True).start()
+        return False
+    faltan = _check_modules(OPTIONAL)
+    if not messagebox.askyesno(
+        "Bandeja del sistema",
+        "Para minimizar a la bandeja del sistema (junto al reloj) hacen falta:\n"
+        f"   {', '.join(faltan)}\n\n¿Instalarlos ahora? (necesita internet, ~20 s)",
+    ):
+        return False
+    REQUIRED.update(OPTIONAL)
+    try:
+        ensure_dependencies()
+    finally:
+        for mod in OPTIONAL:
+            REQUIRED.pop(mod, None)
+    return opcionales_disponibles()
+
+
 def ensure_dependencies():
-    """Comprueba las librerÃ­as y, si faltan, las instala con ESTE mismo Python."""
+    """Comprueba las librerías y, si faltan, las instala con ESTE mismo Python."""
     problems = _check_modules()
     if not problems:
         return
@@ -83,20 +139,20 @@ def ensure_dependencies():
     root.withdraw()
     pkgs = list(problems)
     if not messagebox.askyesno(
-        "InstalaciÃ³n necesaria",
+        "Instalación necesaria",
         f"No se pudieron cargar: {', '.join(pkgs)}\n\n"
         f"Python en uso:\n{sys.executable}\n\n"
-        "Â¿Instalarlos ahora automÃ¡ticamente?\n"
+        "¿Instalarlos ahora automáticamente?\n"
         "(Necesita internet y puede tardar un minuto.)",
     ):
         root.destroy()
         sys.exit(1)
 
     win = tk.Toplevel(root)
-    win.title("Instalandoâ€¦")
+    win.title("Instalando…")
     win.geometry("360x90")
     win.resizable(False, False)
-    ttk.Label(win, text=f"Instalando {', '.join(pkgs)}â€¦\nNo cierres esta ventana.").pack(pady=(12, 6))
+    ttk.Label(win, text=f"Instalando {', '.join(pkgs)}…\nNo cierres esta ventana.").pack(pady=(12, 6))
     bar = ttk.Progressbar(win, mode="indeterminate", length=300)
     bar.pack()
     bar.start(15)
@@ -134,12 +190,12 @@ def ensure_dependencies():
         messagebox.showerror(
             "Instalado, pero no carga",
             f"Python: {sys.executable}\n\n{detalle}\n\n"
-            "Cierra el programa y vuelve a abrirlo. Si persiste, envÃ­ame este texto.",
+            "Cierra el programa y vuelve a abrirlo. Si persiste, envíame este texto.",
         )
         root.destroy()
         sys.exit(1)
 
-    messagebox.showinfo("Listo", "InstalaciÃ³n completada. Se abrirÃ¡ el programa.")
+    messagebox.showinfo("Listo", "Instalación completada. Se abrirá el programa.")
     root.destroy()
 
 
@@ -149,31 +205,31 @@ import sounddevice as sd  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Robustez (esto es lo que evita los micrÃ³fonos "mudos" al encender la PC)
+# Robustez (esto es lo que evita los micrófonos "mudos" al encender la PC)
 #
-# El fallo real: al iniciar sesiÃ³n, Windows todavÃ­a estÃ¡ levantando el motor de
+# El fallo real: al iniciar sesión, Windows todavía está levantando el motor de
 # audio y los drivers virtuales (Steam Streaming, VB-Cable, etc.). Si se abren
-# varios micrÃ³fonos justo ahÃ­, PortAudio/WASAPI deja streams "zombis" (abiertos
-# pero sin datos) y el watchdog los reabrÃ­a cada 6 s. Esa insistencia sobre un
-# driver que aÃºn no estÃ¡ listo es lo que atasca el motor de audio de Windows y
-# deja TODOS los micrÃ³fonos sin nivel hasta reiniciar.
+# varios micrófonos justo ahí, PortAudio/WASAPI deja streams "zombis" (abiertos
+# pero sin datos) y el watchdog los reabría cada 6 s. Esa insistencia sobre un
+# driver que aún no está listo es lo que atasca el motor de audio de Windows y
+# deja TODOS los micrófonos sin nivel hasta reiniciar.
 #
-# Ahora: se espera a que el audio estÃ© estable, se calienta el motor, los
-# micrÃ³fonos se abren DE A UNO comprobando que entregan datos, los fallos se
-# frenan con retroceso exponencial, un dispositivo problemÃ¡tico se aÃ­sla solo
+# Ahora: se espera a que el audio esté estable, se calienta el motor, los
+# micrófonos se abren DE A UNO comprobando que entregan datos, los fallos se
+# frenan con retroceso exponencial, un dispositivo problemático se aísla solo
 # (cuarentena) y el arranque con Windows no abre dispositivos virtuales.
 # ---------------------------------------------------------------------------
 _DIR_CFG = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "MultiMicMonitor")
 LOG_PATH = os.path.join(_DIR_CFG, "multimic.log")
 
-# Dispositivos virtuales / de streaming: sus drivers casi nunca estÃ¡n listos en
+# Dispositivos virtuales / de streaming: sus drivers casi nunca están listos en
 # el arranque. Se pueden abrir a mano, pero no solos al iniciar con Windows.
 #
-# OJO: esto es solo una AYUDA, no el mecanismo de seguridad. La protecciÃ³n real
+# OJO: esto es solo una AYUDA, no el mecanismo de seguridad. La protección real
 # (abrir de a uno + comprobar que entregan datos + cuarentena + modo seguro) es
-# independiente de los nombres, asÃ­ que funciona igual en equipos con otros
+# independiente de los nombres, así que funciona igual en equipos con otros
 # dispositivos. Si en tu PC hay un dispositivo virtual con otro nombre, agregalo
-# en la configuraciÃ³n:  "virtual_extra": ["mi_dsp", "loopback focusrite"]
+# en la configuración:  "virtual_extra": ["mi_dsp", "loopback focusrite"]
 VIRTUAL_HINTS = (
     "steam streaming", "cable output", "cable input", "vb-audio", "voicemeeter",
     "virtual", "asignador de sonido", "sound mapper", "stereo mix", "mezcla est",
@@ -182,15 +238,20 @@ VIRTUAL_HINTS = (
 )
 
 # Valores por defecto de los tiempos y umbrales. Todos se pueden sobrescribir en
-# el config.json para adaptarlos a equipos lentos o rÃ¡pidos sin tocar el cÃ³digo.
+# el config.json para adaptarlos a equipos lentos o rápidos sin tocar el código.
 AJUSTES_POR_DEFECTO = {
-    "seg_espera_audio": 90.0,     # mÃ¡ximo esperando a que el audio quede estable
+    "seg_espera_audio": 90.0,     # máximo esperando a que el audio quede estable
     "seg_comprobar_datos": 1.5,   # frecuencia con la que se comprueba que llegan datos
-    "intentos_comprobar": 3,      # comprobaciones antes de cerrar y aislar el micrÃ³fono
+    "intentos_comprobar": 3,      # comprobaciones antes de cerrar y aislar el micrófono
     "max_fallos": 4,              # fallos seguidos antes de aislar un dispositivo
     "seg_modo_seguro": 45.0,      # espera antes de reintentar en modo seguro
     "dias_cuarentena": 7,         # el aislamiento caduca solo (por si el driver se arregla)
     "virtual_extra": [],          # patrones adicionales de dispositivos virtuales
+    # Espera a que SerchTube esté listo al iniciar con Windows (ver el flujo abajo)
+    "esperar_serchtube": True,
+    "seg_espera_serchtube": 120.0,    # máximo esperando a que SerchTube esté listo
+    "retardo_tras_serchtube": 15.0,   # retardo DESPUÉS de verlo listo (se recorta a 30 s)
+    "puerto_serchtube": 3000,
 }
 
 MAX_FALLOS = AJUSTES_POR_DEFECTO["max_fallos"]
@@ -198,9 +259,13 @@ MAX_FALLOS = AJUSTES_POR_DEFECTO["max_fallos"]
 
 def _ajuste(cfg: dict, clave: str):
     """Lee un ajuste del config, validando el tipo (configs viejos o editados a mano)."""
-    valor = cfg.get(clave, AJUSTES_POR_DEFECTO[clave]) if isinstance(cfg, dict) else AJUSTES_POR_DEFECTO[clave]
     base = AJUSTES_POR_DEFECTO[clave]
+    valor = cfg.get(clave, base) if isinstance(cfg, dict) else base
     try:
+        if isinstance(base, bool):        # antes que int: bool es subclase de int
+            if isinstance(valor, str):
+                return valor.strip().lower() in ("1", "true", "si", "sí", "yes", "on")
+            return bool(valor)
         if isinstance(base, float):
             return float(valor)
         if isinstance(base, int):
@@ -218,9 +283,10 @@ def es_virtual(nombre: str, extra=()) -> bool:
 
 
 def bonito(nombre: str) -> str:
-    """Solo para MOSTRAR: algunos drivers entregan el nombre en UTF-8 mal decodificado
-    ("MicrÃƒÂ³fono"). Se intenta reparar; si no se puede, se deja igual.
-    Nunca se usa como clave de configuraciÃ³n (los nombres reales no se tocan)."""
+    """Solo para MOSTRAR: algunos drivers entregan el nombre con los bytes UTF-8
+    leídos como si fueran cp1252 (por ejemplo, "Micrófono" llega con 2 caracteres
+    de más en lugar de la "ó"). Se intenta reparar; si no se puede, se deja igual.
+    Nunca se usa como clave de configuración (los nombres reales no se tocan)."""
     try:
         return (nombre or "").encode("latin-1").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
@@ -252,7 +318,7 @@ _MUTEX = None
 
 def instancia_unica() -> bool:
     """False si ya hay otra copia abierta: dos copias peleando por los mismos
-    micrÃ³fonos es otra forma de dejar el audio atascado."""
+    micrófonos es otra forma de dejar el audio atascado."""
     global _MUTEX
     try:
         import ctypes
@@ -265,7 +331,7 @@ def instancia_unica() -> bool:
 
 
 def _instantanea_entradas():
-    """Lista de entradas del sistema (para saber cuÃ¡ndo dejÃ³ de cambiar)."""
+    """Lista de entradas del sistema (para saber cuándo dejó de cambiar)."""
     try:
         return tuple((d["name"], d["hostapi"])
                      for d in sd.query_devices() if d["max_input_channels"] > 0)
@@ -303,21 +369,21 @@ def _probar_entrada(idx: int, segundos: float = 1.5):
 
 
 def calentar_motor_de_audio(segundos: float = 0.8) -> bool:
-    """Abre y cierra el micrÃ³fono predeterminado para despertar el motor de audio de
-    Windows antes de abrir los micrÃ³fonos reales (evita streams zombis).
-    Devuelve True si ademÃ¡s llegaron datos: si no llegan, el motor de audio ya venÃ­a
-    atascado (o el micrÃ³fono predeterminado no estÃ¡ disponible)."""
+    """Abre y cierra el micrófono predeterminado para despertar el motor de audio de
+    Windows antes de abrir los micrófonos reales (evita streams zombis).
+    Devuelve True si además llegaron datos: si no llegan, el motor de audio ya venía
+    atascado (o el micrófono predeterminado no está disponible)."""
     try:
         idx = sd.default.device[0]
         if idx is None or int(idx) < 0:
-            _log("Calentamiento: no hay micrÃ³fono predeterminado definido en Windows.")
+            _log("Calentamiento: no hay micrófono predeterminado definido en Windows.")
             return False
         llego, pico = _probar_entrada(int(idx), max(0.4, segundos))
         if llego:
             _log(f"Calentamiento del motor de audio: OK (pico {pico:.3f}).")
         else:
-            _log("Calentamiento del motor de audio: el micrÃ³fono predeterminado "
-                 "NO entregÃ³ datos.")
+            _log("Calentamiento del motor de audio: el micrófono predeterminado "
+                 "NO entregó datos.")
         return llego
     except Exception as e:
         _log(f"Calentamiento del motor de audio: no se pudo ({e}).")
@@ -338,7 +404,177 @@ atexit.register(_soltar_audio)
 
 
 # ---------------------------------------------------------------------------
-# Audio (sin numpy: enteros de 16 bits con array/deque de la biblioteca estÃ¡ndar)
+# Espera a que SerchTube esté listo (solo cuando lo lanza Windows al iniciar)
+# ---------------------------------------------------------------------------
+def serchtube_responde(puerto: int = 3000, timeout: float = 2.0) -> bool:
+    """True si el servidor de SerchTube contesta /api/health con su identidad
+    (así no lo confundimos con cualquier cosa que escuche en ese puerto)."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{int(puerto)}/api/health",
+                                    timeout=timeout) as r:
+            if int(getattr(r, "status", 0)) != 200:
+                return False
+            try:
+                datos = json.loads(r.read().decode("utf-8", "replace"))
+            except Exception:
+                return True        # responde 200: sirve
+            texto = f"{datos.get('app', '')} {datos.get('appName', '')}".lower()
+            return "serchtube" in texto or not texto.strip()
+    except Exception:
+        return False
+
+
+def ventana_visible_con(titulo: str, exacto: bool = True) -> bool:
+    """True si hay una ventana visible cuyo título coincide con el texto.
+    Por defecto la comparación es EXACTA: cualquier pestaña del navegador con
+    "SerchTube" en el título daría un falso positivo."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        estado = {"v": False}
+        tipo = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        buscado = titulo.lower()
+
+        def cb(hwnd, _lparam):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            actual = buf.value.strip().lower()
+            if (actual == buscado) if exacto else (buscado in actual):
+                estado["v"] = True
+                return False        # encontrada: cortar
+            return True
+
+        user32.EnumWindows(tipo(cb), 0)
+        return estado["v"]
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Configuración de sonido de Windows (para "Autoconfigurar")
+# ---------------------------------------------------------------------------
+def endpoints_registrados(tipo: str = "capture"):
+    """Dispositivos de audio de Windows leídos del registro: [(nombre, id, estado)].
+    Solo lectura, no necesita administrador.
+    estado: 1 = activo, 2 = deshabilitado, 4 = no presente, 8 = desconectado."""
+    import winreg
+    if tipo == "capture":
+        raiz = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
+        prefijo = "{0.0.1.00000000}."
+    else:
+        raiz = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"
+        prefijo = "{0.0.0.00000000}."
+    res = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, raiz) as k:
+            i = 0
+            while True:
+                try:
+                    guid = winreg.EnumKey(k, i)
+                except OSError:
+                    break
+                i += 1
+                nombre, estado = None, None
+                try:
+                    with winreg.OpenKey(k, guid + r"\Properties") as pk:
+                        nombre, _ = winreg.QueryValueEx(
+                            pk, "{a45c254e-df1c-4efd-8020-67d146a850e0},2")
+                except OSError:
+                    pass
+                try:
+                    with winreg.OpenKey(k, guid) as dk:
+                        estado, _ = winreg.QueryValueEx(dk, "DeviceState")
+                except OSError:
+                    pass
+                if nombre:
+                    res.append((nombre, prefijo + guid, estado))
+    except OSError:
+        pass
+    return res
+
+
+def endpoint_activo(estado) -> bool:
+    """¿El dispositivo está activo? DeviceState: 1 = activo; los bits altos son
+    banderas extra (no presente, desconectado, etc.)."""
+    if estado is None:
+        return True
+    try:
+        return (int(estado) & 0xF) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def establecer_predeterminado(device_id: str) -> bool:
+    """Pone un endpoint como predeterminado en los 3 roles (consola/multimedia/
+    comunicaciones) usando IPolicyConfig, la misma vía que usan los utilitarios de
+    audio. Es una API no documentada: si falla, devuelve False y el programa explica
+    cómo hacerlo a mano."""
+    try:
+        import uuid
+        from ctypes import (POINTER, Structure, byref, c_int, c_ubyte, c_ulong,
+                            c_ushort, c_void_p, c_wchar_p)
+
+        class GUID(Structure):
+            _fields_ = [("D1", c_ulong), ("D2", c_ushort), ("D3", c_ushort),
+                        ("D4", c_ubyte * 8)]
+
+        def a_guid(txt):
+            g = GUID()
+            ctypes.memmove(ctypes.byref(g), uuid.UUID(txt.strip("{}")).bytes_le, 16)
+            return g
+
+        clsid = a_guid("{870af99c-171d-4f9e-af0d-e63df40c2bc9}")   # CPolicyConfigClient
+        iid = a_guid("{f8679f50-850a-41cf-9c72-430f290290c8}")     # IPolicyConfig
+        ole32 = ctypes.windll.ole32
+        ole32.CoInitializeEx(None, 0x2)          # APARTMENTTHREADED
+        puntero = c_void_p()
+        hr = ole32.CoCreateInstance(byref(clsid), None, 0x17, byref(iid), byref(puntero))
+        if hr != 0 or not puntero:
+            return False
+        vtbl = ctypes.cast(puntero, POINTER(POINTER(c_void_p)))[0]
+        # SetDefaultEndpoint es el metodo 13 (0 = QueryInterface, 1 = AddRef, 2 = Release)
+        llamar = ctypes.WINFUNCTYPE(c_ulong, c_void_p, c_wchar_p, c_int)(vtbl[13])
+        ok = True
+        for rol in (0, 1, 2):
+            if llamar(puntero, device_id, rol) != 0:
+                ok = False
+        try:
+            ctypes.WINFUNCTYPE(c_ulong, c_void_p)(vtbl[2])(puntero)   # Release
+        except Exception:
+            pass
+        try:
+            ole32.CoUninitialize()
+        except Exception:
+            pass
+        return ok
+    except Exception:
+        return False
+
+
+def _cli_predeterminado(fragmento: str, tipo: str = "capture") -> int:
+    """Modo consola: pone el dispositivo cuyo nombre contenga el texto como
+    predeterminado de Windows. Se ejecuta en un proceso aparte (si Windows no lo
+    permite, el fallo no afecta a la ventana del programa)."""
+    candidatos = [(n, i, e) for (n, i, e) in endpoints_registrados(tipo)
+                  if fragmento.lower() in n.lower() and endpoint_activo(e)]
+    if not candidatos:
+        print(f"NO_ENCONTRADO: no hay dispositivo cuyo nombre contenga '{fragmento}'")
+        return 2
+    nombre, device_id, _ = candidatos[0]
+    ok = establecer_predeterminado(device_id)
+    print(("OK: " if ok else "FALLO: ") + f"{bonito(nombre)} ({device_id})")
+    return 0 if ok else 3
+
+
+# ---------------------------------------------------------------------------
+# Audio (sin numpy: enteros de 16 bits con array/deque de la biblioteca estándar)
 # ---------------------------------------------------------------------------
 def to_mono(raw, ch: int) -> array:
     a = array("h")
@@ -366,7 +602,7 @@ class Ring:
         with self.lock:
             self.q.append(a)
             self.n += len(a)
-            while self.n > self.cap and self.q:  # desborde: descarta lo mÃ¡s viejo
+            while self.n > self.cap and self.q:  # desborde: descarta lo más viejo
                 self.n -= len(self.q.popleft())
 
     def read(self, k: int, keep: int) -> array:
@@ -399,11 +635,11 @@ class Mic:
         self.gain = 1.0
         self.boost = 1.0          # refuerzo extra (factor lineal)
         self.level = 0.0          # pico acumulado entre refrescos del medidor
-        self.last_cb = 0.0        # Ãºltima vez que llegÃ³ audio del dispositivo
-        self.heard_at = 0.0       # Ãºltima vez que hubo seÃ±al audible
-        self.retry_at = 0.0       # prÃ³xima ventana de reinicio automÃ¡tico (watchdog)
+        self.last_cb = 0.0        # última vez que llegó audio del dispositivo
+        self.heard_at = 0.0       # última vez que hubo señal audible
+        self.retry_at = 0.0       # próxima ventana de reinicio automático (watchdog)
         self.hold = 0.0           # marcador de pico del medidor
-        self.listening = False    # Â¿se envÃ­a a las bocinas?
+        self.listening = False    # ¿se envía a las bocinas?
         self.ratio = 1.0
         self.ch = 1
         self.keep = 0
@@ -418,8 +654,8 @@ class Mic:
             now = time.time()
             self.last_cb = now
             x = to_mono(indata, self.ch)
-            # Volumen y Boost se aplican AQUÃ, en la fuente: asÃ­ afectan al medidor
-            # y a la mezcla aunque no estÃ©s usando "Escuchar" hacia las bocinas
+            # Volumen y Boost se aplican AQUÍ, en la fuente: así afectan al medidor
+            # y a la mezcla aunque no estés usando "Escuchar" hacia las bocinas
             g = self.gain * self.boost
             if x and g != 1.0:
                 x = array("h", [max(-32768, min(32767, int(s * g))) for s in x])
@@ -453,8 +689,8 @@ class Mic:
         last = None
         for rate, extra in attempts:
             try:
-                # Sin latency="low": en WASAPI compartido los buffers mÃ­nimos
-                # provocan cortes y abren/cierran el motor de audio de mÃ¡s.
+                # Sin latency="low": en WASAPI compartido los buffers mínimos
+                # provocan cortes y abren/cierran el motor de audio de más.
                 self.ratio = out_rate / rate
                 s = sd.RawInputStream(
                     device=self.index, samplerate=rate, channels=self.ch, dtype="int16",
@@ -560,7 +796,7 @@ CONFIG_PATH = os.path.join(
 
 
 def load_config() -> dict:
-    """Lee la configuraciÃ³n guardada (micrÃ³fonos con inicio automÃ¡tico, volÃºmenes, salida)."""
+    """Lee la configuración guardada (micrófonos con inicio automático, volúmenes, salida)."""
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             cfg = json.load(f)
@@ -587,7 +823,7 @@ def save_config(cfg: dict):
 # ---------------------------------------------------------------------------
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_NAME = "MultiMicMonitor"
-STARTUP_LAUNCH = "--inicio" in sys.argv       # lo lanzÃ³ Windows al iniciar sesiÃ³n
+STARTUP_LAUNCH = "--inicio" in sys.argv       # lo lanzó Windows al iniciar sesión
 START_MINIMIZED = "--minimizado" in sys.argv
 
 
@@ -639,12 +875,12 @@ class App(tk.Tk):
         self.minsize(640, 460)
 
         self.rows = []
-        self.active_mics = []   # micrÃ³fonos abiertos (con medidor)
-        self.listen_mics = []   # micrÃ³fonos que suenan en la salida
+        self.active_mics = []   # micrófonos abiertos (con medidor)
+        self.listen_mics = []   # micrófonos que suenan en la salida
         self.out_stream = None
         self.out_rate = 48000
         self.out_ch = 2
-        self.out_devs = []      # (Ã­ndice, nombre)
+        self.out_devs = []      # (índice, nombre)
         self.out_var = tk.StringVar()
         self.cfg = load_config()
         self._boot_retries = 0
@@ -657,6 +893,16 @@ class App(tk.Tk):
         self.seg_modo_seguro = _ajuste(self.cfg, "seg_modo_seguro")
         self.dias_cuarentena = _ajuste(self.cfg, "dias_cuarentena")
         self.virtual_extra = _ajuste(self.cfg, "virtual_extra")
+        self.esperar_serchtube = _ajuste(self.cfg, "esperar_serchtube")
+        self.seg_espera_serchtube = _ajuste(self.cfg, "seg_espera_serchtube")
+        self.retardo_tras_serchtube = _ajuste(self.cfg, "retardo_tras_serchtube")
+        self.puerto_serchtube = _ajuste(self.cfg, "puerto_serchtube")
+        # estado de la espera a SerchTube y de la bandeja del sistema
+        self._serchtube_ticks = 0
+        self._serchtube_ventana = False
+        self._tray = None
+        self._tray_ok = False
+        self._en_bandeja = False
         # estado de la apertura en serie / modo seguro
         self._cola_auto = []
         self._errores_auto = []
@@ -668,9 +914,10 @@ class App(tk.Tk):
         self.min_var = tk.BooleanVar(value=bool(self.cfg.get("minimized", False)))
         self.rl_var = tk.BooleanVar(value=bool(self.cfg.get("remember_listen", False)))
         self.virt_var = tk.BooleanVar(value=bool(self.cfg.get("abrir_virtuales", False)))
+        self.serch_var = tk.BooleanVar(value=bool(self.esperar_serchtube))
         self.master_gain = float(self.cfg.get("master_gain", 1.0))   # volumen maestro de la mezcla
         self.ontop_var = tk.BooleanVar(value=bool(self.cfg.get("always_on_top", False)))
-        if self.startup_var.get():  # mantiene al dÃ­a la ruta registrada si moviste el archivo
+        if self.startup_var.get():  # mantiene al día la ruta registrada si moviste el archivo
             try:
                 set_startup(True, self.min_var.get())
             except Exception:
@@ -681,12 +928,88 @@ class App(tk.Tk):
         self._apply_ontop()
         self.refresh_devices()
         self._dark_titlebar()
-        # Al iniciar sesiÃ³n Windows, el audio puede tardar en estar listo: se espera un poco
+        # Bandeja del sistema: para poder minimizar ahí (junto al reloj) en vez de
+        # dejar el programa en la barra de tareas.
+        self._tray_ok = ensure_opcionales(interactivo=not STARTUP_LAUNCH)
+        if not self._tray_ok:
+            _log("Bandeja del sistema no disponible por ahora: el minimizar usara la barra de tareas.")
+        self.bind("<Unmap>", self._al_desmapear)
+        # Al iniciar sesión Windows, el audio puede tardar en estar listo: se espera un poco
         self.after(8000 if STARTUP_LAUNCH else 400, self._autostart_boot)
         self.after(80, self._tick)
         if START_MINIMIZED:
-            self.iconify()
+            self.after(600, self.minimizar_a_bandeja)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ---------- Bandeja del sistema ----------
+    def _iniciar_bandeja(self) -> bool:
+        """Crea el icono en la bandeja (pystray corre en su propio hilo)."""
+        if self._tray is not None:
+            return True
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+        except Exception as e:
+            _log(f"Bandeja del sistema: falta pystray/Pillow ({e}).")
+            return False
+        try:
+            img = Image.new("RGBA", (64, 64), (16, 17, 20, 255))
+            d = ImageDraw.Draw(img)
+            d.rounded_rectangle((26, 8, 38, 34), radius=6, fill=(79, 140, 255, 255))
+            d.arc((16, 22, 48, 50), start=0, end=180, fill=(79, 140, 255, 255), width=5)
+            d.line((32, 48, 32, 56), fill=(79, 140, 255, 255), width=5)
+
+            def mostrar(icon=None, item=None):
+                self.after(0, self.restaurar_ventana)
+
+            def alternar(icon=None, item=None):
+                if self.state() == "withdrawn" or self._en_bandeja:
+                    self.after(0, self.restaurar_ventana)
+                else:
+                    self.after(0, self.minimizar_a_bandeja)
+
+            def salir(icon=None, item=None):
+                self.after(0, self._on_close)
+
+            menu = pystray.Menu(
+                pystray.MenuItem("Mostrar Multi Mic Monitor", mostrar, default=True),
+                pystray.MenuItem("Ocultar / mostrar", alternar),
+                pystray.MenuItem("Salir", salir),
+            )
+            self._tray = pystray.Icon("MultiMicMonitor", img, "Multi Mic Monitor", menu)
+            self._tray.run_detached()      # se integra con el bucle de tkinter
+            _log("Bandeja del sistema lista.")
+            return True
+        except Exception as e:
+            _log(f"No se pudo crear el icono de la bandeja: {e}")
+            self._tray = None
+            return False
+
+    def minimizar_a_bandeja(self):
+        """Oculta la ventana y deja solo el icono junto al reloj."""
+        if self._iniciar_bandeja():
+            self._en_bandeja = True
+            self.withdraw()
+            _log("Ventana minimizada a la bandeja del sistema.")
+        else:
+            self.iconify()                # sin bandeja: minimizar normal
+
+    def restaurar_ventana(self):
+        self._en_bandeja = False
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+
+    def _al_desmapear(self, _evento=None):
+        """El botón minimizar de la ventana envía la ventana a la bandeja."""
+        try:
+            if self._tray_ok and self.state() == "iconic":
+                self.minimizar_a_bandeja()
+        except Exception:
+            pass
 
     # ---------- Estilo ----------
     def _setup_style(self):
@@ -713,7 +1036,7 @@ class App(tk.Tk):
                      lightcolor=COL["card2"], darkcolor=COL["card2"])
 
     def _dark_titlebar(self):
-        """Barra de tÃ­tulo oscura en Windows 10/11 (si estÃ¡ disponible)."""
+        """Barra de título oscura en Windows 10/11 (si está disponible)."""
         try:
             import ctypes
             self.update()
@@ -731,9 +1054,9 @@ class App(tk.Tk):
         top.pack(fill="x", padx=14, pady=(14, 4))
         tk.Label(top, text="Multi Mic Monitor", bg=bg, fg=COL["fg"],
                  font=("Segoe UI", 15, "bold")).pack(side="left")
-        self.btn_refresh = make_button(top, "â†» Actualizar", self.refresh_devices)
+        self.btn_refresh = make_button(top, "↻ Actualizar", self.refresh_devices)
         self.btn_refresh.pack(side="right")
-        tip(self.btn_refresh, "Vuelve a leer la lista de micrÃ³fonos y salidas. Ãšsalo despuÃ©s de conectar o desconectar un dispositivo. (Se desactiva mientras hay mics activos.)")
+        tip(self.btn_refresh, "Vuelve a leer la lista de micrófonos y salidas. Úsalo después de conectar o desconectar un dispositivo. (Se desactiva mientras hay mics activos.)")
 
         out = tk.Frame(self, bg=bg)
         out.pack(fill="x", padx=14, pady=6)
@@ -741,14 +1064,14 @@ class App(tk.Tk):
                  font=("Segoe UI", 9)).pack(side="left")
         self.combo = ttk.Combobox(out, textvariable=self.out_var, state="readonly")
         self.combo.pack(side="left", fill="x", expand=True, padx=8)
-        tip(self.combo, "Por dÃ³nde se oye la mezcla. Para que el asistente escuche TODOS tus mics: elige 'CABLE Input' (requiere VB-Cable) y pon 'CABLE Output' como micrÃ³fono predeterminado de Windows. El botÃ³n 'GuÃ­a Asistente' te ayuda.")
+        tip(self.combo, "Por dónde se oye la mezcla. Para que el asistente escuche TODOS tus mics: elige 'CABLE Input' (requiere VB-Cable) y pon 'CABLE Output' como micrófono predeterminado de Windows. El botón 'Guía Asistente' te ayuda.")
         self.combo.bind("<<ComboboxSelected>>", lambda e: self._remember())
 
         tk.Label(
             self, bg=bg, fg=COL["muted"], font=("Segoe UI", 9), anchor="w", justify="left",
-            text="â» Activar = abre el micrÃ³fono y muestra su barra (no se oye).   "
-                 "ðŸ”Š Escuchar = lo manda a tus bocinas.\n"
-                 "Para comprobar que funciona: actÃ­valo y habla cerca; la barra debe moverse.",
+            text="⏻ Activar = abre el micrófono y muestra su barra (no se oye).   "
+                 "🔊 Escuchar = lo manda a tus bocinas.\n"
+                 "Para comprobar que funciona: actívalo y habla cerca; la barra debe moverse.",
         ).pack(fill="x", padx=14, pady=(0, 4))
 
         box = tk.Frame(self, bg=bg)
@@ -769,35 +1092,38 @@ class App(tk.Tk):
         bottom = tk.Frame(self, bg=bg)
         bottom.pack(fill="x", padx=14, pady=(4, 4))
         b_at = make_button(bottom, "Activar todos", self.activate_all); b_at.pack(side="left")
-        tip(b_at, "Abre TODOS los micrÃ³fonos de la lista (medidor funcionando y listos para la mezcla). No se oye nada en las bocinas.")
+        tip(b_at, "Abre TODOS los micrófonos de la lista (medidor funcionando y listos para la mezcla). No se oye nada en las bocinas.")
         b_dt = make_button(bottom, "Desactivar todos", self.deactivate_all); b_dt.pack(side="left", padx=6)
-        tip(b_dt, "Cierra todos los micrÃ³fonos abiertos y libera los dispositivos.")
-        b_mut = make_button(bottom, "ðŸ”‡ Silenciar todos", self.mute_all, bg="#3a2226"); b_mut.pack(side="left")
+        tip(b_dt, "Cierra todos los micrófonos abiertos y libera los dispositivos.")
+        b_mut = make_button(bottom, "🔇 Silenciar todos", self.mute_all, bg="#3a2226"); b_mut.pack(side="left")
         tip(b_mut, "Quita el sonido de la mezcla hacia las bocinas/cable, pero deja los mics abiertos (los medidores siguen activos).")
-        b_diag = make_button(bottom, "â„¹ DiagnÃ³stico", self.show_diag); b_diag.pack(side="right")
-        tip(b_diag, "Datos tÃ©cnicos: versiÃ³n de Python, librerÃ­a de audio, dispositivos detectados. Ãštil si algo no funciona.")
-        b_fix = make_button(bottom, "ðŸ›  Reparar audio", self.reparar_audio, bg="#3a2f16")
+        b_diag = make_button(bottom, "ℹ Diagnóstico", self.show_diag); b_diag.pack(side="right")
+        tip(b_diag, "Datos técnicos: versión de Python, librería de audio, dispositivos detectados. Útil si algo no funciona.")
+        b_fix = make_button(bottom, "🛠 Reparar audio", self.reparar_audio, bg="#3a2f16")
         b_fix.pack(side="right", padx=6)
-        tip(b_fix, "Si los micrÃ³fonos dejaron de registrar volumen, reinicia el servicio de audio de Windows (pide permiso de administrador). AsÃ­ no tenÃ©s que reiniciar la PC.")
-        b_guia = make_button(bottom, "ðŸŽ™ GuÃ­a Asistente (VB-Cable)", self.show_assistant_guide, bg="#12324f"); b_guia.pack(side="right", padx=6)
-        tip(b_guia, "Pasos para que SerchTube escuche TODOS tus mics a la vez usando el cable virtual. Si VB-Cable ya estÃ¡ instalado, te ofrece poner la salida con un clic.")
+        tip(b_fix, "Si los micrófonos dejaron de registrar volumen, reinicia el servicio de audio de Windows (pide permiso de administrador). Así no tenés que reiniciar la PC.")
+        b_auto = make_button(bottom, "⚙ Autoconfigurar", self.autoconfigurar, bg="#12324f")
+        b_auto.pack(side="right", padx=6)
+        tip(b_auto, "Deja todo configurado para captar TODOS los micrófonos: elige la salida de mezcla (CABLE Input), activa los micrófonos reales al 100% sin abrir los virtuales, y pone 'CABLE Output' como micrófono predeterminado de Windows (si tenés el cable virtual instalado).")
+        b_guia = make_button(bottom, "🎙 Guía Asistente (VB-Cable)", self.show_assistant_guide, bg="#12324f"); b_guia.pack(side="right", padx=6)
+        tip(b_guia, "Pasos para que SerchTube escuche TODOS tus mics a la vez usando el cable virtual. Si VB-Cable ya está instalado, te ofrece poner la salida con un clic.")
 
         opts = tk.Frame(self, bg=bg)
         opts.pack(fill="x", padx=14, pady=(2, 0))
         c_sw = make_check(opts, "Iniciar con Windows", self.startup_var, self._on_startup_change); c_sw.pack(side="left")
-        tip(c_sw, "Abre este programa automÃ¡ticamente cada vez que enciendas la PC (recomendado para el asistente).")
+        tip(c_sw, "Abre este programa automáticamente cada vez que enciendas la PC (recomendado para el asistente).")
         c_min = make_check(opts, "Iniciar minimizado", self.min_var, self._on_startup_change); c_min.pack(side="left", padx=14)
         tip(c_min, "Al arrancar con Windows, abre la ventana minimizada sin estorbar.")
         opts2 = tk.Frame(self, bg=bg)
         opts2.pack(fill="x", padx=14, pady=(0, 0))
-        c_rl = make_check(opts2, "Recordar quÃ© micrÃ³fonos se escuchan (cuidado con las bocinas)",
+        c_rl = make_check(opts2, "Recordar qué micrófonos se escuchan (cuidado con las bocinas)",
                    self.rl_var, self._remember); c_rl.pack(side="left")
-        tip(c_rl, "Guarda quÃ© mics estaban mandando sonido y los reactiva al abrir. CUIDADO: si estaban conectados a bocinas reales, puede generarse eco.")
+        tip(c_rl, "Guarda qué mics estaban mandando sonido y los reactiva al abrir. CUIDADO: si estaban conectados a bocinas reales, puede generarse eco.")
 
         opts3 = tk.Frame(self, bg=bg)
         opts3.pack(fill="x", padx=14, pady=(2, 0))
-        c_top = make_check(opts3, "ðŸ“Œ Siempre visible", self.ontop_var, self._on_ontop_change); c_top.pack(side="left")
-        tip(c_top, "Mantiene esta ventana por encima de las demÃ¡s (Ãºtil mientras calibras micrÃ³fonos).")
+        c_top = make_check(opts3, "📌 Siempre visible", self.ontop_var, self._on_ontop_change); c_top.pack(side="left")
+        tip(c_top, "Mantiene esta ventana por encima de las demás (útil mientras calibras micrófonos).")
         tk.Label(opts3, text="Vol. maestro de la mezcla:", bg=bg, fg=COL["muted"],
                  font=("Segoe UI", 9)).pack(side="left", padx=(14, 4))
         self.master_var = tk.DoubleVar(value=self.master_gain)
@@ -811,10 +1137,14 @@ class App(tk.Tk):
 
         opts4 = tk.Frame(self, bg=bg)
         opts4.pack(fill="x", padx=14, pady=(0, 0))
-        c_virt = make_check(opts4, "ðŸŽ› Abrir dispositivos virtuales al iniciar con Windows",
+        c_serch = make_check(opts4, "⏳ Esperar a SerchTube al iniciar (máx. 30 s)",
+                             self.serch_var, self._remember)
+        c_serch.pack(side="left")
+        tip(c_serch, "Al encender la PC, este programa espera a que SerchTube termine de arrancar (servidor y ventana) y recién ahí abre tus micrófonos: 15 s después como máximo. Solo se aplica si 'Iniciar con Windows' está activo.")
+        c_virt = make_check(opts4, "🎛 Abrir dispositivos virtuales al iniciar con Windows",
                             self.virt_var, self._remember)
-        c_virt.pack(side="left")
-        tip(c_virt, "Los dispositivos virtuales (Steam Streaming, VB-Cable, Voicemeeter, Sunshineâ€¦) muchas veces no estÃ¡n listos al encender la PC: abrirlos ahÃ­ es lo que dejaba los micrÃ³fonos sin volumen. Dejalo DESMARCADO salvo que los necesites en el arranque. Igual podÃ©s abrirlos a mano cuando quieras.")
+        c_virt.pack(side="left", padx=14)
+        tip(c_virt, "Los dispositivos virtuales (Steam Streaming, VB-Cable, Voicemeeter, Sunshine…) muchas veces no están listos al encender la PC: abrirlos ahí es lo que dejaba los micrófonos sin volumen. Dejalo DESMARCADO salvo que los necesites en el arranque. Igual podés abrirlos a mano cuando quieras.")
 
         self.status = tk.Label(self, text="Todo apagado.", bg=bg, fg=COL["muted"],
                                font=("Segoe UI", 9), anchor="w")
@@ -824,7 +1154,7 @@ class App(tk.Tk):
         if self.active_mics:
             return
         if self.out_stream is None:
-            # Releer dispositivos con PortAudio SOLO si no hay ningÃºn stream abierto:
+            # Releer dispositivos con PortAudio SOLO si no hay ningún stream abierto:
             # terminar/reiniciar PortAudio con streams vivos deja WASAPI colgado.
             try:
                 sd._terminate()
@@ -859,7 +1189,7 @@ class App(tk.Tk):
                 found = True
                 self._add_row(Mic(i, dev, wasapi_idx is not None))
         if not found:
-            tk.Label(self.list_frame, text="No se encontraron micrÃ³fonos.", bg=COL["bg"],
+            tk.Label(self.list_frame, text="No se encontraron micrófonos.", bg=COL["bg"],
                      fg=COL["muted"]).pack(pady=20)
         self._after_change()
 
@@ -876,13 +1206,13 @@ class App(tk.Tk):
         card = tk.Frame(self.list_frame, bg=c, padx=12, pady=10)
         card.pack(fill="x", pady=5, padx=(0, 6))
 
-        # --- Fila 1: nombre (editable), estado, inicio automÃ¡tico ---
+        # --- Fila 1: nombre (editable), estado, inicio automático ---
         head = tk.Frame(card, bg=c)
         head.pack(fill="x")
         name_lbl = tk.Label(head, text=alias or bonito(mic.name), bg=c, fg=COL["fg"], anchor="w",
                             font=("Segoe UI", 10, "bold"))
         name_lbl.pack(side="left")
-        edit_btn = tk.Label(head, text="âœŽ", bg=c, fg=COL["muted"], cursor="hand2",
+        edit_btn = tk.Label(head, text="✎", bg=c, fg=COL["muted"], cursor="hand2",
                             font=("Segoe UI", 10))
         edit_btn.pack(side="left", padx=6)
         status = tk.Label(head, text="Apagado", bg=c, fg=COL["muted"], font=("Segoe UI", 9))
@@ -895,7 +1225,7 @@ class App(tk.Tk):
             cursor="hand2",
         )
         chk_auto.pack(side="right", padx=14)
-        tip(chk_auto, "Si estÃ¡ marcado, este micrÃ³fono se activa solo cada vez que abres el programa (o enciendes la PC).")
+        tip(chk_auto, "Si está marcado, este micrófono se activa solo cada vez que abres el programa (o enciendes la PC).")
 
         row = {
             "mic": mic, "status": status, "status_txt": "", "auto": auto_var,
@@ -904,9 +1234,9 @@ class App(tk.Tk):
             "virtual": es_virtual(mic.name, self.virtual_extra),
         }
         mic.row = row
-        # Si este dispositivo ya fallÃ³ antes, no se vuelve a abrir solo hasta que
-        # el usuario lo pida a mano (asÃ­ un driver roto no vuelve a dejar el audio mudo).
-        # El aislamiento caduca solo: si actualizÃ¡s el driver, se reintenta.
+        # Si este dispositivo ya falló antes, no se vuelve a abrir solo hasta que
+        # el usuario lo pida a mano (así un driver roto no vuelve a dejar el audio mudo).
+        # El aislamiento caduca solo: si actualizás el driver, se reintenta.
         cuarentena = self.cfg.get("cuarentena")
         if isinstance(cuarentena, dict) and mic.name in cuarentena:
             info_cuar = cuarentena[mic.name]
@@ -915,22 +1245,22 @@ class App(tk.Tk):
             if dias <= self.dias_cuarentena:
                 mic.quarantined = True
                 auto_var.set(False)
-                motivo = info_cuar.get("motivo", "fallÃ³ antes") if isinstance(info_cuar, dict) else "fallÃ³ antes"
-                status.config(text=f"âš  Aislado: {motivo}", fg=COL["amber"])
+                motivo = info_cuar.get("motivo", "falló antes") if isinstance(info_cuar, dict) else "falló antes"
+                status.config(text=f"⚠ Aislado: {motivo}", fg=COL["amber"])
             else:
                 cuarentena.pop(mic.name, None)
-                _log(f"El aislamiento de '{mic.name}' caducÃ³ tras {dias:.1f} dÃ­as: se vuelve a intentar.")
+                _log(f"El aislamiento de '{mic.name}' caducó tras {dias:.1f} días: se vuelve a intentar.")
         edit_btn.bind("<Button-1>", lambda e, r=row: self._rename(r))
         name_lbl.bind("<Double-Button-1>", lambda e, r=row: self._rename(r))
-        tip(name_lbl, "Nombre real del dispositivo. Doble clic (o la âœŽ) para ponerle un apodo, ej: 'Micro cocina'.")
+        tip(name_lbl, "Nombre real del dispositivo. Doble clic (o la ✎) para ponerle un apodo, ej: 'Micro cocina'.")
 
         # --- Fila 2: botones y volumen ---
         ctl = tk.Frame(card, bg=c)
         ctl.pack(fill="x", pady=(8, 0))
-        btn_act = make_button(ctl, "â»  Activar", lambda r=row: self.on_active_toggle(r), width=11)
+        btn_act = make_button(ctl, "⏻  Activar", lambda r=row: self.on_active_toggle(r), width=11)
         btn_act.pack(side="left")
-        tip(btn_act, "Abre este micrÃ³fono: su medidor empieza a funcionar y su audio entra a la mezcla. No se oye en las bocinas a menos que actives 'Escuchar'.")
-        btn_lis = make_button(ctl, "ðŸ”‡ Silenciado", lambda r=row: self.on_listen_toggle(r), width=13)
+        tip(btn_act, "Abre este micrófono: su medidor empieza a funcionar y su audio entra a la mezcla. No se oye en las bocinas a menos que actives 'Escuchar'.")
+        btn_lis = make_button(ctl, "🔇 Silenciado", lambda r=row: self.on_listen_toggle(r), width=13)
         btn_lis.config(state="disabled")
         btn_lis.pack(side="left", padx=6)
         tip(btn_lis, "Escuchar = este mic se oye por la salida elegida. Para el asistente con VB-Cable NO hace falta: con 'Activar' basta.")
@@ -941,7 +1271,7 @@ class App(tk.Tk):
         vol = ttk.Scale(ctl, from_=0.0, to=2.0, value=mic.gain,
                         command=lambda v, m=mic: self._on_gain(m, v))
         vol.pack(side="left", fill="x", expand=True)
-        tip(vol, "Volumen de ESTE micrÃ³fono dentro de la mezcla (0% a 200%). Se guarda solo.")
+        tip(vol, "Volumen de ESTE micrófono dentro de la mezcla (0% a 200%). Se guarda solo.")
 
         # --- Fila 3: medidor de nivel ---
         mrow = tk.Frame(card, bg=c)
@@ -964,9 +1294,9 @@ class App(tk.Tk):
     def _style_boost(self, row: dict):
         extra = BOOST_STEPS[row["boost_i"]]
         if extra:
-            row["btn_boost"].config(text=f"ðŸš€ Boost +{extra} dB", bg=COL["amber"], fg="#1a1204")
+            row["btn_boost"].config(text=f"🚀 Boost +{extra} dB", bg=COL["amber"], fg="#1a1204")
         else:
-            row["btn_boost"].config(text="ðŸš€ Boost: Off", bg=COL["card2"], fg=COL["fg"])
+            row["btn_boost"].config(text="🚀 Boost: Off", bg=COL["card2"], fg=COL["fg"])
 
     def _cycle_boost(self, row: dict):
         row["boost_i"] = (row["boost_i"] + 1) % len(BOOST_STEPS)
@@ -975,7 +1305,7 @@ class App(tk.Tk):
         self._remember()
 
     def _rename(self, row: dict):
-        """Edita el nombre que se muestra (Enter guarda, Esc cancela, vacÃ­o = nombre original)."""
+        """Edita el nombre que se muestra (Enter guarda, Esc cancela, vacío = nombre original)."""
         if row["editing"]:
             return
         row["editing"] = True
@@ -1052,11 +1382,11 @@ class App(tk.Tk):
                     continue
                 chunk = m.ring.read(frames, m.keep)
                 # El volumen y boost de cada micro ya se aplicaron en la fuente (_cb);
-                # aquÃ­ solo entra el volumen maestro de la mezcla
+                # aquí solo entra el volumen maestro de la mezcla
                 g = self.master_gain
                 mix = [a + int(b * g) for a, b in zip(mix, chunk)]
             peak = max(max(mix), -min(mix))
-            if peak > 32767:  # limitador: baja el bloque en vez de recortarlo (menos distorsiÃ³n)
+            if peak > 32767:  # limitador: baja el bloque en vez de recortarlo (menos distorsión)
                 f = 32767.0 / peak
                 mix = [int(s * f) for s in mix]
             mono = array("h", [32767 if s > 32767 else -32768 if s < -32768 else s for s in mix])
@@ -1082,8 +1412,8 @@ class App(tk.Tk):
         self.btn_refresh.config(state="disabled" if busy else "normal")
         if busy:
             self.status.config(
-                text=f"{len(self.active_mics)} micrÃ³fono(s) activo(s) Â· "
-                     f"{len(self.listen_mics)} escuchÃ¡ndose. "
+                text=f"{len(self.active_mics)} micrófono(s) activo(s) · "
+                     f"{len(self.listen_mics)} escuchándose. "
                      "(Desactiva todos para cambiar la salida.)")
         else:
             self.status.config(text="Todo apagado.")
@@ -1097,15 +1427,15 @@ class App(tk.Tk):
             mic.ring.clear()
             mic.listening = True
             self.listen_mics = self.listen_mics + [mic]
-            row["btn_lis"].config(text="ðŸ”Š Escuchando", bg=COL["accent"], fg="#ffffff")
+            row["btn_lis"].config(text="🔊 Escuchando", bg=COL["accent"], fg="#ffffff")
         else:
             mic.listening = False
             self.listen_mics = [m for m in self.listen_mics if m is not mic]
-            row["btn_lis"].config(text="ðŸ”‡ Silenciado", bg=COL["card2"], fg=COL["fg"])
+            row["btn_lis"].config(text="🔇 Silenciado", bg=COL["card2"], fg=COL["fg"])
         return True
 
     def _activate(self, row: dict):
-        """Abre el micrÃ³fono. Devuelve None si saliÃ³ bien, o el texto del error."""
+        """Abre el micrófono. Devuelve None si salió bien, o el texto del error."""
         mic = row["mic"]
         if not self.active_mics:
             sel = self._selected_out()
@@ -1117,7 +1447,7 @@ class App(tk.Tk):
         except Exception as e:
             return str(e)
         self.active_mics = self.active_mics + [mic]
-        row["btn_act"].config(text="â»  Activo", bg=COL["green"], fg="#08160d")
+        row["btn_act"].config(text="⏻  Activo", bg=COL["green"], fg="#08160d")
         row["btn_lis"].config(state="normal")
         return None
 
@@ -1134,9 +1464,9 @@ class App(tk.Tk):
             err = self._activate(row)
             if err:
                 messagebox.showerror(
-                    "No se pudo abrir el micrÃ³fono",
-                    f"{err}\n\nRevisa que Windows permita el acceso al micrÃ³fono a las "
-                    "aplicaciones de escritorio (ConfiguraciÃ³n > Privacidad > MicrÃ³fono).",
+                    "No se pudo abrir el micrófono",
+                    f"{err}\n\nRevisa que Windows permita el acceso al micrófono a las "
+                    "aplicaciones de escritorio (Configuración > Privacidad > Micrófono).",
                 )
                 return
         else:  # desactivar
@@ -1145,8 +1475,8 @@ class App(tk.Tk):
             row["want_listen"] = False
             self.active_mics = [m for m in self.active_mics if m is not mic]
             mic.stop()
-            row["btn_act"].config(text="â»  Activar", bg=COL["card2"], fg=COL["fg"])
-            row["btn_lis"].config(state="disabled", text="ðŸ”‡ Silenciado", bg=COL["card2"], fg=COL["fg"])
+            row["btn_act"].config(text="⏻  Activar", bg=COL["card2"], fg=COL["fg"])
+            row["btn_lis"].config(state="disabled", text="🔇 Silenciado", bg=COL["card2"], fg=COL["fg"])
         self._after_change()
 
     def on_listen_toggle(self, row: dict):
@@ -1176,19 +1506,71 @@ class App(tk.Tk):
         self._after_change()
         self._remember()
 
-    # ---------- Inicio automÃ¡tico (seguro) y configuraciÃ³n ----------
+    # ---------- Inicio automático (seguro) y configuración ----------
     def _autostart_boot(self):
-        if STARTUP_LAUNCH:
-            _log("Arranque con Windows: esperando a que el audio estÃ© listo...")
-            self._audio_snap = None
-            self._audio_estable = 0
-            self._audio_espera = 0
-            self._esperar_audio_y_arrancar()
-        else:
+        """Al iniciar con Windows: 1) espera a SerchTube (si está activado),
+        2) espera a que el audio esté estable, 3) abre los micrófonos de a uno."""
+        if not STARTUP_LAUNCH:
             self._autostart()
+            return
+        self._audio_snap = None
+        self._audio_estable = 0
+        self._audio_espera = 0
+        if self.esperar_serchtube and self.serch_var.get():
+            self._serchtube_ticks = 0
+            self._serchtube_ventana = False
+            _log("Arranque con Windows: esperando a que SerchTube esté listo "
+                 f"(máximo {int(self.seg_espera_serchtube)} s)...")
+            self.status.config(text="Esperando a que SerchTube arranque…", fg=COL["amber"])
+            self._esperar_serchtube()
+            return
+        _log("Arranque con Windows: la espera a SerchTube está desactivada en la configuración.")
+        self._esperar_audio_y_arrancar()
+
+    def _esperar_serchtube(self):
+        """Sondeo sin bloquear la ventana: servidor que responde + ventana dibujada."""
+        paso_ms = 2000
+        segundos = self._serchtube_ticks * (paso_ms / 1000.0)
+        if not serchtube_responde(self.puerto_serchtube):
+            if segundos >= self.seg_espera_serchtube:
+                _log(f"AVISO: SerchTube no respondió en {int(self.seg_espera_serchtube)} s; "
+                     "se continúa con los micrófonos igual.")
+                self._tras_serchtube(False)
+                return
+            self._serchtube_ticks += 1
+            self.status.config(text=f"Esperando a que SerchTube arranque… ({int(segundos)}s)",
+                               fg=COL["amber"])
+            self.after(paso_ms, self._esperar_serchtube)
+            return
+
+        if not self._serchtube_ventana:
+            if ventana_visible_con("SerchTube Music"):
+                self._serchtube_ventana = True
+                _log(f"SerchTube está listo (servidor + ventana) tras {int(segundos)} s.")
+            elif segundos >= self.seg_espera_serchtube:
+                _log("SerchTube responde pero no se detectó su ventana; se continúa igual.")
+            else:
+                self._serchtube_ticks += 1
+                self.status.config(text="SerchTube responde; esperando su ventana…", fg=COL["amber"])
+                self.after(paso_ms, self._esperar_serchtube)
+                return
+        self._tras_serchtube(True)
+
+    def _tras_serchtube(self, listo: bool):
+        """Retardo corto DESPUÉS de que SerchTube está listo (nunca más de 30 s)."""
+        espera = max(0.0, min(30.0, self.retardo_tras_serchtube))
+        if not listo or espera <= 0:
+            self._esperar_audio_y_arrancar()
+            return
+        _log(f"SerchTube listo: se esperan {int(espera)} s y después se abren los micrófonos.")
+        self.status.config(text=f"SerchTube listo. Abriendo micrófonos en {int(espera)} s…",
+                           fg=COL["green"])
+        self.after(int(espera * 1000), self._esperar_audio_y_arrancar)
 
     def _esperar_audio_y_arrancar(self):
         """Sin bloquear la ventana: espera a que la lista de entradas deje de cambiar."""
+        if self._audio_espera == 0:
+            _log("Esperando a que Windows termine de cargar el audio...")
         snap = _instantanea_entradas()
         if snap and snap == self._audio_snap:
             self._audio_estable += 1
@@ -1202,16 +1584,16 @@ class App(tk.Tk):
                  f"({len(snap) if snap else 0} entradas).")
             self.refresh_devices()
             if not calentar_motor_de_audio():
-                _log("AVISO: el micrÃ³fono predeterminado no entregÃ³ datos. El motor de audio "
-                     "podrÃ­a estar atascado: probÃ¡ 'ðŸ›  Reparar audio' o revisa el micrÃ³fono "
+                _log("AVISO: el micrófono predeterminado no entregó datos. El motor de audio "
+                     "podría estar atascado: probá '🛠 Reparar audio' o revisa el micrófono "
                      "predeterminado de Windows.")
                 self.status.config(
-                    text="âš  El audio de Windows no responde: probÃ¡ 'ðŸ›  Reparar audio'",
+                    text="⚠ El audio de Windows no responde: probá '🛠 Reparar audio'",
                     fg=COL["red"])
             self._autostart()
             return
         self.status.config(
-            text=f"Esperando a que Windows termine de cargar el audioâ€¦ ({int(self._audio_espera * 1.5)}s)",
+            text=f"Esperando a que Windows termine de cargar el audio… ({int(self._audio_espera * 1.5)}s)",
             fg=COL["amber"])
         self.after(1500, self._esperar_audio_y_arrancar)
 
@@ -1227,7 +1609,7 @@ class App(tk.Tk):
         self._remember()
 
     def _autostart(self):
-        """Abre los micrÃ³fonos marcados 'Iniciar al abrir' DE A UNO y comprobando
+        """Abre los micrófonos marcados 'Iniciar al abrir' DE A UNO y comprobando
         que entregan datos: abrirlos todos a la vez es lo que atasca el motor de
         audio de Windows cuando la PC acaba de encender."""
         self._errores_auto = []
@@ -1237,12 +1619,12 @@ class App(tk.Tk):
                 continue
             mic = row["mic"]
             if mic.quarantined:
-                self._set_status(row, "âš  Aislado: no se abre solo", COL["amber"])
+                self._set_status(row, "⚠ Aislado: no se abre solo", COL["amber"])
                 continue
             if STARTUP_LAUNCH and not self.virt_var.get() and row.get("virtual"):
                 _log(f"No se abre '{mic.name}' al iniciar: dispositivo virtual "
-                     "(su driver no estÃ¡ listo al encender la PC).")
-                self._set_status(row, "ðŸŽ› Virtual: no se abre al iniciar", COL["muted"])
+                     "(su driver no está listo al encender la PC).")
+                self._set_status(row, "🎛 Virtual: no se abre al iniciar", COL["muted"])
                 continue
             self._cola_auto.append(row)
         if self._cola_auto:
@@ -1261,11 +1643,11 @@ class App(tk.Tk):
             _log(f"No se pudo abrir '{row['mic'].name}': {err}")
             self.after(700, self._abrir_siguiente)
             return
-        self._set_status(row, "â— Comprobandoâ€¦", COL["amber"])
+        self._set_status(row, "● Comprobando…", COL["amber"])
         self._comprobar_arranque(row, 0)
 
     def _comprobar_arranque(self, row, intentos: int):
-        """Confirma que el micrÃ³fono entrega datos ANTES de abrir el siguiente."""
+        """Confirma que el micrófono entrega datos ANTES de abrir el siguiente."""
         mic = row["mic"]
         if mic.stream is None or mic.quarantined:
             self.after(400, self._abrir_siguiente)
@@ -1276,7 +1658,7 @@ class App(tk.Tk):
             self.after(1200, self._abrir_siguiente)
             return
         if intentos >= self.intentos_comprobar:   # sin datos: cerrar y aislar
-            self._cerrar_mic(row, "no entregÃ³ datos al abrir")
+            self._cerrar_mic(row, "no entregó datos al abrir")
             self.after(900, self._abrir_siguiente)
             return
         self.after(int(self.seg_comprobar_datos * 1000),
@@ -1287,14 +1669,14 @@ class App(tk.Tk):
         if not errores:
             return
         if STARTUP_LAUNCH:
-            _log("MicrÃ³fonos que no se pudieron abrir al iniciar:\n" + "\n".join(errores))
-            self.status.config(text="âš  Algunos micrÃ³fonos no se abrieron: mira DiagnÃ³stico",
+            _log("Micrófonos que no se pudieron abrir al iniciar:\n" + "\n".join(errores))
+            self.status.config(text="⚠ Algunos micrófonos no se abrieron: mira Diagnóstico",
                                fg=COL["amber"])
         else:
             messagebox.showwarning(
-                "Algunos micrÃ³fonos no se pudieron abrir",
-                "\n".join(errores) + "\n\nRevisa que Windows permita el acceso al micrÃ³fono "
-                "(ConfiguraciÃ³n > Privacidad > MicrÃ³fono) y que ningÃºn otro programa lo use.",
+                "Algunos micrófonos no se pudieron abrir",
+                "\n".join(errores) + "\n\nRevisa que Windows permita el acceso al micrófono "
+                "(Configuración > Privacidad > Micrófono) y que ningún otro programa lo use.",
             )
 
     def _cerrar_mic(self, row, motivo: str):
@@ -1306,15 +1688,15 @@ class App(tk.Tk):
         self.active_mics = [m for m in self.active_mics if m is not mic]
         self.listen_mics = [m for m in self.listen_mics if m is not mic]
         try:
-            row["btn_act"].config(text="â»  Activar", bg=COL["card2"], fg=COL["fg"])
-            row["btn_lis"].config(state="disabled", text="ðŸ”‡ Silenciado",
+            row["btn_act"].config(text="⏻  Activar", bg=COL["card2"], fg=COL["fg"])
+            row["btn_lis"].config(state="disabled", text="🔇 Silenciado",
                                   bg=COL["card2"], fg=COL["fg"])
         except Exception:
             pass
         self._cuarentena(row, motivo)
 
     def _cuarentena(self, row, motivo: str):
-        """AÃ­sla un dispositivo problemÃ¡tico para que no vuelva a tumbar el audio."""
+        """Aísla un dispositivo problemático para que no vuelva a tumbar el audio."""
         mic = row["mic"]
         mic.quarantined = True
         mic.fail_count = max(mic.fail_count, self.max_fallos)
@@ -1322,22 +1704,22 @@ class App(tk.Tk):
             row["auto"].set(False)
         except Exception:
             pass
-        self._set_status(row, "âš  Desactivado: " + motivo, COL["red"])
+        self._set_status(row, "⚠ Desactivado: " + motivo, COL["red"])
         cuar = self.cfg.get("cuarentena")
         if not isinstance(cuar, dict):
             cuar = {}
             self.cfg["cuarentena"] = cuar
         cuar[mic.name] = {"motivo": motivo, "cuando": time.time()}
         self._remember()
-        _log(f"Mic aislado '{mic.name}': {motivo}. No se abrirÃ¡ solo; "
-             "actÃ­valo a mano y revisa cable, permisos o driver.")
+        _log(f"Mic aislado '{mic.name}': {motivo}. No se abrirá solo; "
+             "actívalo a mano y revisa cable, permisos o driver.")
 
     def _on_gain(self, mic: Mic, value):
         mic.gain = float(value)
         self._remember()
 
     def _remember(self):
-        """Guarda (con un pequeÃ±o retraso) quÃ© micrÃ³fonos inician solos, volÃºmenes y salida."""
+        """Guarda (con un pequeño retraso) qué micrófonos inician solos, volúmenes y salida."""
         for row in self.rows:
             self.cfg["mics"][row["mic"].name] = {
                 "auto": bool(row["auto"].get()),
@@ -1350,6 +1732,7 @@ class App(tk.Tk):
         self.cfg["minimized"] = bool(self.min_var.get())
         self.cfg["remember_listen"] = bool(self.rl_var.get())
         self.cfg["abrir_virtuales"] = bool(self.virt_var.get())
+        self.cfg["esperar_serchtube"] = bool(self.serch_var.get())
         self.cfg["master_gain"] = round(self.master_gain, 2)
         self.cfg["always_on_top"] = bool(self.ontop_var.get())
         if self._save_job:
@@ -1372,9 +1755,9 @@ class App(tk.Tk):
         self._apply_ontop()
         self._remember()
 
-    # ---------- GuÃ­a Asistente (VB-Cable) ----------
+    # ---------- Guía Asistente (VB-Cable) ----------
     def _cable_devices(self):
-        """Devuelve (salida_cable, entrada_cable) si VB-Cable estÃ¡ instalado."""
+        """Devuelve (salida_cable, entrada_cable) si VB-Cable está instalado."""
         devs = sd.query_devices()
         outs = [(i, d["name"]) for i, d in enumerate(devs)
                 if d["max_output_channels"] > 0 and "cable" in d["name"].lower()]
@@ -1387,33 +1770,33 @@ class App(tk.Tk):
         cable_out = next((n for _, n in outs if "cable input" in n.lower()), None)
         cable_in = next((n for _, n in ins if "cable output" in n.lower()), None)
         pasos = (
-            "Convierte TODOS tus micrÃ³fonos en un solo 'micrÃ³fono' que SerchTube\n"
-            "escucha (el navegador solo admite el micrÃ³fono predeterminado de Windows):\n\n"
+            "Convierte TODOS tus micrófonos en un solo 'micrófono' que SerchTube\n"
+            "escucha (el navegador solo admite el micrófono predeterminado de Windows):\n\n"
             "1. Instala VB-Cable (gratis): https://vb-audio.com/Cable/\n"
             "   (descomprime y ejecuta VBCABLE_Setup_x64.exe como administrador)\n"
-            "2. AquÃ­, en 'Salida de audio', elige: " + (cable_out or "'CABLE Input' (aparece al instalar)") + "\n"
-            "3. Activa tus micrÃ³fonos con 'â» Activar' (NO uses 'Escuchar').\n"
-            "4. En Windows: ConfiguraciÃ³n > Sistema > Sonido > Entrada >\n"
+            "2. Aquí, en 'Salida de audio', elige: " + (cable_out or "'CABLE Input' (aparece al instalar)") + "\n"
+            "3. Activa tus micrófonos con '⏻ Activar' (NO uses 'Escuchar').\n"
+            "4. En Windows: Configuración > Sistema > Sonido > Entrada >\n"
             "   elige '" + (cable_in or "CABLE Output (Voicemeeter AUX Virtual Audio Device)") + "'\n"
-            "   como MICRÃ“FONO PREDETERMINADO.\n\n"
+            "   como MICRÓFONO PREDETERMINADO.\n\n"
             "Listo: la mezcla de todos tus mics llega a SerchTube como un solo micro.\n"
             "Deja este programa abierto (o activa 'Iniciar con Windows')."
         )
         msg = pasos
         if cable_out:
-            if messagebox.askyesno("GuÃ­a Asistente", msg + "\n\nÂ¿Quieres que ponga la salida del cable AHORA como salida de audio?"):
+            if messagebox.askyesno("Guía Asistente", msg + "\n\n¿Quieres que ponga la salida del cable AHORA como salida de audio?"):
                 self.out_var.set(cable_out)
                 self._remember()
         else:
-            msg = ("VB-Cable NO estÃ¡ instalado todavÃ­a.\n\n" + pasos)
-            messagebox.showinfo("GuÃ­a Asistente", msg)
+            msg = ("VB-Cable NO está instalado todavía.\n\n" + pasos)
+            messagebox.showinfo("Guía Asistente", msg)
 
     # ---------- Watchdog de dispositivos (arranque de Windows) ----------
     def _watchdog_restart(self, mic: Mic):
-        """Reabre un micrÃ³fono cuyos datos se cortaron, con FRENO exponencial.
+        """Reabre un micrófono cuyos datos se cortaron, con FRENO exponencial.
         Insistir sobre un dispositivo que falla es justo lo que dejaba el motor de
-        audio de Windows atascado y los micrÃ³fonos mudos hasta reiniciar: por eso
-        tras varios fallos seguidos el dispositivo se aÃ­sla y se deja en paz."""
+        audio de Windows atascado y los micrófonos mudos hasta reiniciar: por eso
+        tras varios fallos seguidos el dispositivo se aísla y se deja en paz."""
         now = time.time()
         if mic.quarantined or now < mic.retry_at:
             return
@@ -1422,7 +1805,7 @@ class App(tk.Tk):
 
         if mic.fail_count >= self.max_fallos:
             if mic.row is not None:
-                self._cerrar_mic(mic.row, f"fallÃ³ {mic.fail_count} veces seguidas")
+                self._cerrar_mic(mic.row, f"falló {mic.fail_count} veces seguidas")
             else:
                 try:
                     mic.stop()
@@ -1441,7 +1824,7 @@ class App(tk.Tk):
             mic.start(self.out_rate)
             mic.last_cb = time.time()
             _log(f"Mic reiniciado: {mic.name} (intento {mic.fail_count}, "
-                 f"prÃ³ximo reintento en {int(mic.retry_at - now)}s si falla)")
+                 f"próximo reintento en {int(mic.retry_at - now)}s si falla)")
             if was_listening:
                 mic.listening = True
                 if mic not in self.listen_mics:
@@ -1459,13 +1842,13 @@ class App(tk.Tk):
             _log(f"Fallo al reiniciar {mic.name} (intento {mic.fail_count}): {e}")
 
     def _modo_seguro(self, motivo: str):
-        """Varios micrÃ³fonos sin datos a la vez = el motor de audio de Windows estÃ¡
+        """Varios micrófonos sin datos a la vez = el motor de audio de Windows está
         atascado. En vez de martillarlo, se cierra TODO, se espera y se reabre de a uno."""
         now = time.time()
         if now < self._safe_until:
             return
         self._safe_until = now + max(30.0, self.seg_modo_seguro * 1.7)
-        _log(f"MODO SEGURO: {motivo}. Se cierran todos los micrÃ³fonos y se reabrirÃ¡n "
+        _log(f"MODO SEGURO: {motivo}. Se cierran todos los micrófonos y se reabrirán "
              f"de a uno en {int(self.seg_modo_seguro)} s.")
         self._cola_auto = []
         for row in self.rows:
@@ -1481,8 +1864,8 @@ class App(tk.Tk):
             mic.retry_at = 0.0
             mic.level = 0.0
             try:
-                row["btn_act"].config(text="â»  Activar", bg=COL["card2"], fg=COL["fg"])
-                row["btn_lis"].config(state="disabled", text="ðŸ”‡ Silenciado",
+                row["btn_act"].config(text="⏻  Activar", bg=COL["card2"], fg=COL["fg"])
+                row["btn_lis"].config(state="disabled", text="🔇 Silenciado",
                                       bg=COL["card2"], fg=COL["fg"])
             except Exception:
                 pass
@@ -1496,25 +1879,119 @@ class App(tk.Tk):
                 pass
             self.out_stream = None
         self._after_change()
-        self.status.config(text="ðŸ›  Modo seguro: el audio de Windows se atascÃ³. "
-                                f"Reintentando de a uno en {int(self.seg_modo_seguro)} sâ€¦",
+        self.status.config(text="🛠 Modo seguro: el audio de Windows se atascó. "
+                                f"Reintentando de a uno en {int(self.seg_modo_seguro)} s…",
                            fg=COL["amber"])
         self.after(int(self.seg_modo_seguro * 1000), self._reintentar_todo)
 
     def _reintentar_todo(self):
-        _log("Modo seguro: reintentando abrir los micrÃ³fonos de a uno.")
+        _log("Modo seguro: reintentando abrir los micrófonos de a uno.")
         calentar_motor_de_audio()
         self._autostart()
 
-    # ---------- ReparaciÃ³n de emergencia (sin reiniciar la PC) ----------
+    # ---------- Autoconfigurar ----------
+    def _poner_predeterminado_windows(self, fragmento: str):
+        """Pide, en un proceso aparte, que Windows use ese dispositivo como micrófono
+        predeterminado. Devuelve (ok, detalle)."""
+        try:
+            r = subprocess.run(
+                [sys.executable, os.path.abspath(__file__), "--set-default-capture", fragmento],
+                capture_output=True, text=True, timeout=90,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            lineas = [l for l in (r.stdout or "").strip().splitlines() if l.strip()]
+            detalle = lineas[-1] if lineas else (r.stderr or "").strip()[-200:]
+            return (r.returncode == 0), detalle
+        except Exception as e:
+            return False, str(e)
+
+    def autoconfigurar(self):
+        """Deja todo listo para captar TODOS los micrófonos conectados:
+             1. elige la salida de mezcla (CABLE Input si hay cable virtual),
+             2. activa al abrir todos los micrófonos reales al 100% y sin "Escuchar",
+             3. deja los dispositivos virtuales sin abrir solos (eran los que rompían el arranque),
+             4. pone "CABLE Output" como micrófono predeterminado de Windows.
+        """
+        cambios, avisos = [], []
+
+        # --- 1) salida de mezcla ---
+        cable_salida = None
+        for _idx, nombre in self.out_devs:
+            if "cable input" in (nombre or "").lower():
+                cable_salida = nombre
+        if cable_salida:
+            if self.out_var.get() != cable_salida:
+                self.out_var.set(cable_salida)
+                cambios.append("Salida de mezcla → " + bonito(cable_salida))
+        else:
+            avisos.append(
+                "No encontré un cable virtual de audio (VB-Cable). Sin él, Windows y el "
+                "navegador solo pueden escuchar UN micrófono a la vez, así que no se pueden "
+                "juntar varios. Es gratis: https://vb-audio.com/Cable/")
+
+        # --- 2 y 3) micrófonos reales y virtuales ---
+        reales = virtuales = 0
+        for row in self.rows:
+            mic = row["mic"]
+            if row.get("virtual"):
+                row["auto"].set(False)
+                virtuales += 1
+            else:
+                row["auto"].set(True)
+                mic.gain = 1.0
+                mic.boost = 1.0
+                row["boost_i"] = 0
+                row["want_listen"] = False
+                reales += 1
+        cambios.append(f"{reales} micrófono(s) reales: inician al abrir, al 100% y sin 'Escuchar'")
+        if virtuales:
+            cambios.append(f"{virtuales} dispositivo(s) virtuales: no se abren solos al iniciar")
+
+        # --- 4) micrófono predeterminado de Windows ---
+        cable_entrada = None
+        for nombre, _id, estado in endpoints_registrados("capture"):
+            if "cable output" in (nombre or "").lower() and endpoint_activo(estado):
+                cable_entrada = nombre
+        if cable_salida and cable_entrada:
+            ok, detalle = self._poner_predeterminado_windows("cable output")
+            if ok:
+                cambios.append("Micrófono predeterminado de Windows → " + bonito(cable_entrada))
+            else:
+                avisos.append(
+                    "Windows no dejó cambiar el micrófono predeterminado automáticamente"
+                    + (f" ({detalle})" if detalle else "") +
+                    ".\nHacelo a mano en 5 segundos: Panel de control → Sonido → Grabación → "
+                    "elegí 'CABLE Output' → Establecer como dispositivo predeterminado "
+                    "(y también como dispositivo de comunicación).")
+        elif cable_salida:
+            avisos.append("El cable está instalado pero Windows todavía no muestra 'CABLE Output'. "
+                          "Reiniciá la PC o reinstalá VB-Cable.")
+
+        # --- extras coherentes: esperar a SerchTube y no abrir virtuales al iniciar ---
+        self.serch_var.set(True)
+        self.virt_var.set(False)
+        cambios.append("Se esperará a que SerchTube esté listo antes de abrir los micrófonos")
+
+        self._remember()
+        save_config(self.cfg)
+        self._after_change()
+
+        resumen = "Configuración aplicada:\n" + "\n".join(f"•  {c}" for c in cambios)
+        if avisos:
+            resumen += "\n\nOjo:\n" + "\n".join(f"•  {a}" for a in avisos)
+        resumen += ("\n\nQueda guardado. Para aplicarlo ahora, usá '⏻ Activar' en cada micrófono "
+                    "(o esperá al próximo arranque con Windows).")
+        _log("Autoconfigurar → " + " | ".join(cambios + avisos))
+        messagebox.showinfo("Autoconfigurar", resumen)
+
+    # ---------- Reparación de emergencia (sin reiniciar la PC) ----------
     def reparar_audio(self):
         """Reinicia el servicio de audio de Windows. Es la salida de emergencia si el
-        motor de audio quedÃ³ atascado y los micrÃ³fonos no registran volumen."""
+        motor de audio quedó atascado y los micrófonos no registran volumen."""
         if not messagebox.askyesno(
             "Reparar el audio de Windows",
-            "Se reiniciarÃ¡ el servicio de audio de Windows (Windows Audio).\n"
-            "PedirÃ¡ permiso de administrador y el sonido se cortarÃ¡ 1-2 segundos.\n\n"
-            "Ãšsalo si los micrÃ³fonos no registran volumen.\n\nÂ¿Continuar?"
+            "Se reiniciará el servicio de audio de Windows (Windows Audio).\n"
+            "Pedirá permiso de administrador y el sonido se cortará 1-2 segundos.\n\n"
+            "Úsalo si los micrófonos no registran volumen.\n\n¿Continuar?"
         ):
             return
         self._cola_auto = []
@@ -1539,15 +2016,15 @@ class App(tk.Tk):
             ctypes.windll.shell32.ShellExecuteW(
                 None, "runas", "powershell.exe",
                 '-NoProfile -ExecutionPolicy Bypass -Command "%s"' % guion, None, 1)
-            _log("ReparaciÃ³n de audio: reiniciando el servicio Windows Audio.")
-            self.status.config(text="ðŸ›  Reiniciando el audio de Windowsâ€¦ se reintentarÃ¡ solo.",
+            _log("Reparación de audio: reiniciando el servicio Windows Audio.")
+            self.status.config(text="🛠 Reiniciando el audio de Windows… se reintentará solo.",
                                fg=COL["amber"])
             self._safe_until = time.time() + 20.0
             self.after(15000, self._reintentar_todo)
         except Exception as e:
             messagebox.showerror("No se pudo reparar el audio", str(e))
 
-    # ---------- DiagnÃ³stico ----------
+    # ---------- Diagnóstico ----------
     def show_diag(self):
         try:
             devs = sd.query_devices()
@@ -1556,7 +2033,7 @@ class App(tk.Tk):
             apis = ", ".join(h["name"] for h in sd.query_hostapis())
             txt = (
                 f"Python: {sys.executable}\n"
-                f"VersiÃ³n de Python: {sys.version.split()[0]}\n"
+                f"Versión de Python: {sys.version.split()[0]}\n"
                 f"sounddevice: {sd.__version__}\n"
                 f"PortAudio: {sd.get_portaudio_version()[1]}\n"
                 f"APIs de audio: {apis}\n"
@@ -1565,7 +2042,7 @@ class App(tk.Tk):
             )
         except Exception:
             txt = traceback.format_exc()
-        messagebox.showinfo("DiagnÃ³stico", txt)
+        messagebox.showinfo("Diagnóstico", txt)
 
     # ---------- Medidores y estado ----------
     def _set_status(self, row: dict, text: str, color: str):
@@ -1575,13 +2052,13 @@ class App(tk.Tk):
 
     def _tick(self):
         now = time.time()
-        # Varios micrÃ³fonos sin datos A LA VEZ = el motor de audio de Windows estÃ¡
-        # atascado (tÃ­pico al encender la PC). En vez de reiniciarlos todos en bucle,
+        # Varios micrófonos sin datos A LA VEZ = el motor de audio de Windows está
+        # atascado (típico al encender la PC). En vez de reiniciarlos todos en bucle,
         # se pasa a modo seguro: cerrar todo, esperar y reabrir de a uno.
         sin_datos = [r for r in self.rows
                      if r["mic"].stream is not None and now - r["mic"].last_cb > 3.0]
         if len(sin_datos) >= 2 and max(r["mic"].fail_count for r in sin_datos) >= 1:
-            self._modo_seguro(f"{len(sin_datos)} micrÃ³fonos sin datos a la vez")
+            self._modo_seguro(f"{len(sin_datos)} micrófonos sin datos a la vez")
 
         for row in self.rows:
             m = row["mic"]
@@ -1591,14 +2068,14 @@ class App(tk.Tk):
                 meter.coords(row["hold"], 0, 0, 0, METER_H)
                 row["db"].config(text="")
                 if m.quarantined:
-                    self._set_status(row, "âš  Aislado: no se abre solo", COL["amber"])
+                    self._set_status(row, "⚠ Aislado: no se abre solo", COL["amber"])
                 else:
                     self._set_status(row, "Apagado", COL["muted"])
                 continue
 
             lvl, m.level = m.level, m.level * 0.6
             if lvl <= 0.001:
-                val, txt = 0.0, "-âˆž dB"
+                val, txt = 0.0, "-∞ dB"
             else:
                 db = 20 * math.log10(lvl)
                 val = max(0.0, min(100.0, (db + 60) / 60 * 100))
@@ -1614,22 +2091,28 @@ class App(tk.Tk):
             row["db"].config(text=txt)
 
             if now - m.last_cb > 3.0:
-                self._set_status(row, "âš  Sin datos: reintentandoâ€¦", COL["red"])
+                self._set_status(row, "⚠ Sin datos: reintentando…", COL["red"])
                 self._watchdog_restart(m)
             else:
-                m.fail_count = 0          # el dispositivo estÃ¡ sano: se limpia el freno
+                m.fail_count = 0          # el dispositivo está sano: se limpia el freno
                 m.retry_at = 0.0
                 if now - m.heard_at < 3.0:
-                    self._set_status(row, "â— SeÃ±al detectada", COL["green"])
+                    self._set_status(row, "● Señal detectada", COL["green"])
                 else:
-                    self._set_status(row, "â— Activo Â· en silencio", COL["muted"])
+                    self._set_status(row, "● Activo · en silencio", COL["muted"])
         self.after(80, self._tick)
 
     def _on_close(self):
         self._remember()
         save_config(self.cfg)
         try:
-            self.deactivate_all()          # cierra los micrÃ³fonos (libera WASAPI)
+            if self._tray is not None:
+                self._tray.stop()
+                self._tray = None
+        except Exception:
+            pass
+        try:
+            self.deactivate_all()          # cierra los micrófonos (libera WASAPI)
         except Exception:
             pass
         try:
@@ -1650,7 +2133,7 @@ class App(tk.Tk):
 def _diagnostico(sondas: bool) -> int:
     """Informe portable del equipo: sirve para validar cualquier PC objetivo.
     Uso:  python MultiMicMonitor.py --diagnostico            (informe, sin abrir nada)
-          python MultiMicMonitor.py --diagnostico --sondas   (ademÃ¡s prueba cada entrada)
+          python MultiMicMonitor.py --diagnostico --sondas   (además prueba cada entrada)
     Guarda el informe en %APPDATA%\\MultiMicMonitor\\diagnostico-<fecha>.txt"""
     import platform
 
@@ -1687,7 +2170,7 @@ def _diagnostico(sondas: bool) -> int:
         nombre_in = sd.query_devices(int(din))["name"] if din is not None and int(din) >= 0 else "(ninguno)"
         nombre_out = sd.query_devices(int(dout))["name"] if dout is not None and int(dout) >= 0 else "(ninguno)"
         w("")
-        w(f"MicrÃ³fono predeterminado de Windows: [{din}] {nombre_in}")
+        w(f"Micrófono predeterminado de Windows: [{din}] {nombre_in}")
         w(f"Salida predeterminada de Windows : [{dout}] {nombre_out}")
     except Exception as e:
         w(f"No se pudo leer el dispositivo predeterminado: {e}")
@@ -1754,7 +2237,7 @@ def _diagnostico(sondas: bool) -> int:
 
 
 def _autotest() -> int:
-    """Autoprueba por consola (no abre la ventana): comprueba que los micrÃ³fonos
+    """Autoprueba por consola (no abre la ventana): comprueba que los micrófonos
     marcados 'Iniciar al abrir' entregan datos y cierra todo limpiamente.
     Uso:  python MultiMicMonitor.py --autotest [--con-virtuales]"""
     print("Multi Mic Monitor - autoprueba (sin interfaz)")
@@ -1833,9 +2316,13 @@ if __name__ == "__main__":
             _r = tk.Tk()
             _r.withdraw()
             messagebox.showinfo("Multi Mic Monitor",
-                                "Ya hay una copia abierta (mirÃ¡ la barra de tareas).")
+                                "Ya hay una copia abierta (mirá la barra de tareas).")
             _r.destroy()
         sys.exit(0)
+    if "--set-default-capture" in sys.argv:
+        i = sys.argv.index("--set-default-capture")
+        texto = sys.argv[i + 1] if len(sys.argv) > i + 1 else ""
+        sys.exit(_cli_predeterminado(texto, "capture"))
     if "--diagnostico" in sys.argv:
         sys.exit(_diagnostico("--sondas" in sys.argv))
     if "--autotest" in sys.argv:
