@@ -3,31 +3,31 @@
   ==================================================================
 
   Que hace:
-    1. Comprueba si el servidor de SerchTube ya responde en el puerto 3000.
-       - Si responde, NO arranca otro servidor (evita el clasico "puerto ocupado").
-       - Si no responde, lo arranca oculto y espera a que este listo.
-    2. Abre Edge con un PERFIL DEDICADO (--user-data-dir) en modo app:
-       - Al ser un perfil propio, Edge no restaura las pestanas de tu sesion normal,
-         que es la causa habitual de que al encender la PC se abran varias.
-       - En modo app no hay barra de pestanas: es una sola ventana con la app.
-    3. Si ya hay una ventana de SerchTube abierta con ese perfil, NO abre otra:
-       la trae al frente. Asi, por mas veces que se ejecute (arranque, doble clic,
-       script de la PC), nunca se acumulan ventanas ni pestanas.
-    4. Registra el arranque automatico en Windows (una sola vez): al encender la PC
-       SerchTube arranca solo, sin consolas visibles, via el guion silencioso
-       scripts\start-serchtube-silencioso.vbs (acceso directo en la carpeta Inicio).
+    1. Candado: si otro arranque de SerchTube esta en curso, no hace nada.
+       (Dos instancias abriendo Edge con el mismo perfil son LA causa del mensaje
+       "Microsoft Edge no puede leer ni escribir en el directorio de datos".)
+    2. Comprueba si el servidor ya responde en el puerto 3000; si no, lo arranca oculto.
+    3. Espera a que el perfil de Edge exista y sea ESCRIBIBLE antes de abrir nada.
+    4. Si ya hay un Edge con nuestro perfil (aunque todavia no tenga ventana),
+       espera a su ventana y la trae al frente: nunca abre un segundo.
+    5. Abre Edge con perfil dedicado en modo app (una sola ventana, sin pestanas).
+    6. Verifica que la ventana aparecio; si no, se autorepara: aparta el perfil
+       dañado y reintenta con uno limpio.
+    7. Registra el arranque automatico de Windows (una sola vez).
 
   Uso:
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\start-serchtube.ps1
     powershell ... -File scripts\start-serchtube.ps1 -QuitarAutoInicio
     powershell ... -File scripts\start-serchtube.ps1 -SinAutoInicio
+    powershell ... -File scripts\start-serchtube.ps1 -RepararPerfil
+    powershell ... -File scripts\start-serchtube.ps1 -PerfilNormal   (usa tu Edge normal)
     powershell ... -File scripts\start-serchtube.ps1 -Modo pestana
-    powershell ... -File scripts\start-serchtube.ps1 -SinNavegador      (solo servidor)
-    powershell ... -File scripts\start-serchtube.ps1 -AutoconcederMicro (kiosco 100% voz)
+    powershell ... -File scripts\start-serchtube.ps1 -SinNavegador
+    powershell ... -File scripts\start-serchtube.ps1 -AutoconcederMicro
 #>
 [CmdletBinding()]
 param(
-  # 'app' = ventana sin pestanas (recomendado) | 'pestana' = una pestana normal con perfil dedicado
+  # 'app' = ventana sin pestanas (recomendado) | 'pestana' = una pestana normal
   [ValidateSet('app', 'pestana')]
   [string]$Modo = 'app',
 
@@ -36,24 +36,21 @@ param(
   # Perfil de Edge exclusivo de SerchTube: aislado de tu sesion normal del navegador
   [string]$PerfilEdge = (Join-Path $env:LOCALAPPDATA 'SerchTubeEdge'),
 
-  # Concede permisos de microfono/camara automaticamente (util en modo kiosco)
+  # Usar el perfil normal de Edge (sin --user-data-dir): plan B si el perfil dedicado falla
+  [switch]$PerfilNormal,
+
+  # Cerrar Edge con nuestro perfil y apartar el perfil (se crea uno limpio)
+  [switch]$RepararPerfil,
+
   [switch]$AutoconcederMicro,
-
-  # Solo comprobar/arrancar el servidor, sin abrir el navegador
   [switch]$SinNavegador,
-
-  # No tocar el arranque automatico de Windows
   [switch]$SinAutoInicio,
-
-  # Quitar SerchTube del arranque automatico de Windows y salir
   [switch]$QuitarAutoInicio,
 
   # Lo pone el guion silencioso cuando Windows lo lanza al iniciar sesion
   [switch]$AutoInicio,
 
-  # En modo autoinicio: espera para que Windows termine de iniciar sesion
   [int]$RetardoSegundos = 15,
-
   [int]$EsperaServidor = 120
 )
 
@@ -61,6 +58,7 @@ $ErrorActionPreference = 'Stop'
 $Raiz = Split-Path -Parent $PSScriptRoot
 $Url = "http://localhost:$Puerto"
 $NombreAutoInicio = 'SerchTube Music'
+$TituloVentana = 'SerchTube Music'
 $VbsSilencioso = Join-Path $PSScriptRoot 'start-serchtube-silencioso.vbs'
 $ClaveRun = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 
@@ -122,16 +120,29 @@ function Get-EdgeExe {
   return $null
 }
 
-function Get-VentanasSerchTube {
-  # Ventanas de Edge abiertas con NUESTRO perfil dedicado (el proceso raiz lleva el flag)
-  $encontradas = @()
+function Get-ProcesosSerchTube {
+  # Cualquier Edge abierto con NUESTRO perfil, tenga ventana o no.
+  # Incluir los que aun no tienen ventana es lo que evita abrir un segundo Edge
+  # (el segundo es el que muestra el error del directorio de datos).
+  if ($PerfilNormal) { return @() }
   try {
-    $procesos = Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction Stop |
-      Where-Object { $_.CommandLine -and $_.CommandLine -like "*$PerfilEdge*" }
+    return @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" -ErrorAction Stop |
+      Where-Object { $_.CommandLine -and $_.CommandLine -like "*$PerfilEdge*" })
   } catch {
-    $procesos = @()
+    return @()
   }
-  foreach ($p in $procesos) {
+}
+
+function Get-VentanasSerchTube {
+  $encontradas = @()
+  if ($PerfilNormal) {
+    # Sin perfil dedicado no hay flag en la linea de comandos: se busca por titulo
+    foreach ($wp in @(Get-Process msedge -ErrorAction SilentlyContinue)) {
+      if ($wp.MainWindowHandle -ne 0 -and $wp.MainWindowTitle -like "*$TituloVentana*") { $encontradas += $wp }
+    }
+    return $encontradas
+  }
+  foreach ($p in @(Get-ProcesosSerchTube)) {
     $wp = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
     if ($wp -and $wp.MainWindowHandle -ne 0) { $encontradas += $wp }
   }
@@ -149,6 +160,44 @@ function Set-FocoVentana($Handle) {
     [void][SerchTube.Nativo]::ShowWindow($Handle, 9)   # SW_RESTORE
     [void][SerchTube.Nativo]::SetForegroundWindow($Handle)
   } catch { }
+}
+
+function Test-PerfilEscribible {
+  try {
+    if (Test-Path -LiteralPath $PerfilEdge -PathType Leaf) {
+      # Hay un ARCHIVO con el nombre del perfil: Edge no puede usarlo
+      $nuevo = Split-Path $PerfilEdge -Leaf
+      Rename-Item -LiteralPath $PerfilEdge -NewName ("$nuevo.archivo-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) -ErrorAction Stop
+      Write-Aviso "Habia un archivo donde debe ir el perfil de Edge; se aparto."
+    }
+    if (-not (Test-Path -LiteralPath $PerfilEdge)) { New-Item -ItemType Directory -Force -Path $PerfilEdge | Out-Null }
+    $prueba = Join-Path $PerfilEdge ('.escritura-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    Set-Content -LiteralPath $prueba -Value 'ok' -Encoding ASCII -ErrorAction Stop
+    Remove-Item -LiteralPath $prueba -Force -ErrorAction SilentlyContinue
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Reset-PerfilEdge {
+  # Cierra cualquier Edge nuestro y aparta el perfil para que Edge cree uno limpio
+  foreach ($p in @(Get-ProcesosSerchTube)) {
+    Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+  Start-Sleep -Seconds 2
+  if (Test-Path -LiteralPath $PerfilEdge) {
+    $nombre = Split-Path $PerfilEdge -Leaf
+    try {
+      Rename-Item -LiteralPath $PerfilEdge -NewName ("$nombre.bak-" + (Get-Date -Format 'yyyyMMdd-HHmmss')) -ErrorAction Stop
+      Write-Aviso "Perfil de Edge apartado a '$nombre.bak-...' (se creara uno limpio)."
+      return $true
+    } catch {
+      Write-Aviso "No se pudo apartar el perfil de Edge: $($_.Exception.Message)"
+      return $false
+    }
+  }
+  return $true
 }
 
 function Get-RutaAccesoInicio {
@@ -216,94 +265,175 @@ function Quitar-AutoInicio {
   return $quitado
 }
 
-# ------------------------------------------------- 0) Quitar autoinicio y salir
-if ($QuitarAutoInicio) {
-  if (Quitar-AutoInicio) {
-    Write-Paso "Autoinicio de Windows eliminado: SerchTube ya no se abrira solo al encender la PC."
-  } else {
-    Write-Aviso "No habia autoinicio registrado de SerchTube."
-  }
+# ------------------------------------------------- 0) Candado de un solo lanzador
+$Candado = New-Object System.Threading.Mutex($false, 'Local\SerchTubeLanzador')
+$TengoElTurno = $false
+try { $TengoElTurno = $Candado.WaitOne(0) } catch { $TengoElTurno = $true }
+if (-not $TengoElTurno) {
+  Write-Paso "Ya hay otro arranque de SerchTube en curso. Este no hace nada (evita duplicar Edge)."
   exit 0
 }
 
-# ------------------------------------------- 1) Arranque automatico: dar tiempo
-if ($AutoInicio -and $RetardoSegundos -gt 0) {
-  Write-Paso "Arranque automatico al iniciar Windows: esperando $RetardoSegundos s antes de abrir la app..."
-  Start-Sleep -Seconds $RetardoSegundos
-}
+try {
+  # ------------------------------------------------- 1) Reparar perfil y salir
+  if ($RepararPerfil) {
+    if (Reset-PerfilEdge) {
+      Write-Paso "Perfil de Edge reparado. Vuelve a ejecutar el arranque normal."
+    }
+    exit 0
+  }
 
-# ---------------------------------------------------------------- 2) Servidor
-Write-Paso "Proyecto: $Raiz"
+  if ($PerfilNormal) { Write-Aviso "Modo -PerfilNormal: se usara tu perfil habitual de Edge." }
 
-if (Test-Servidor) {
-  Write-Paso "El servidor ya responde en $Url (no se inicia otro)."
-} else {
-  Write-Paso "El servidor no responde. Iniciandolo oculto..."
-  $logDir = Join-Path $Raiz 'logs'
-  if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
-  $log = Join-Path $logDir 'servidor.log'
-  $comando = '/c npm run dev >> "' + $log + '" 2>&1'
-  Start-Process -FilePath 'cmd.exe' -ArgumentList $comando -WorkingDirectory $Raiz -WindowStyle Hidden
+  # ------------------------------------------------- 2) Quitar autoinicio y salir
+  if ($QuitarAutoInicio) {
+    if (Quitar-AutoInicio) {
+      Write-Paso "Autoinicio de Windows eliminado: SerchTube ya no se abrira solo al encender la PC."
+    } else {
+      Write-Aviso "No habia autoinicio registrado de SerchTube."
+    }
+    exit 0
+  }
 
-  $limite = (Get-Date).AddSeconds($EsperaServidor)
-  while ((Get-Date) -lt $limite -and -not (Test-Servidor)) { Start-Sleep -Milliseconds 800 }
+  # ------------------------------------------- 3) Arranque automatico: dar tiempo
+  if ($AutoInicio) {
+    # Esperar a que el escritorio (explorer) exista: antes de eso, Edge falla
+    for ($i = 0; $i -lt 60; $i++) {
+      if (Get-Process explorer -ErrorAction SilentlyContinue) { break }
+      Start-Sleep -Seconds 1
+    }
+    if ($RetardoSegundos -gt 0) {
+      Write-Paso "Arranque automatico: esperando $RetardoSegundos s a que Windows termine de iniciar..."
+      Start-Sleep -Seconds $RetardoSegundos
+    }
+  }
+
+  # ---------------------------------------------------------------- 4) Servidor
+  Write-Paso "Proyecto: $Raiz"
 
   if (Test-Servidor) {
-    Write-Paso "Servidor listo en $Url."
+    Write-Paso "El servidor ya responde en $Url (no se inicia otro)."
   } else {
-    Write-Aviso "El servidor no respondio en $EsperaServidor s. Revisa el registro: $log"
-  }
-}
+    Write-Paso "El servidor no responde. Iniciandolo oculto..."
+    $logDir = Join-Path $Raiz 'logs'
+    if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
+    $log = Join-Path $logDir 'servidor.log'
+    $comando = '/c npm run dev >> "' + $log + '" 2>&1'
+    Start-Process -FilePath 'cmd.exe' -ArgumentList $comando -WorkingDirectory $Raiz -WindowStyle Hidden
 
-# ------------------------------------------------- 3) Arranque automatico (una vez)
-if ($SinAutoInicio) {
-  Write-Paso "Autoinicio de Windows sin cambios (-SinAutoInicio)."
-} else {
-  try {
-    if (Registrar-AutoInicio) {
-      Write-Paso "Registrado en el autoinicio de Windows: desde el proximo encendido SerchTube se abre solo."
-      Write-Paso "  Acceso directo: $(Get-RutaAccesoInicio)"
-      Write-Paso "  Para desactivarlo: 'Quitar autoinicio de SerchTube.bat'"
+    $limite = (Get-Date).AddSeconds($EsperaServidor)
+    while ((Get-Date) -lt $limite -and -not (Test-Servidor)) { Start-Sleep -Milliseconds 800 }
+
+    if (Test-Servidor) {
+      Write-Paso "Servidor listo en $Url."
     } else {
-      Write-Paso "El autoinicio de Windows ya estaba configurado."
+      Write-Aviso "El servidor no respondio en $EsperaServidor s. Revisa el registro: $log"
     }
-  } catch {
-    Write-Aviso "No se pudo registrar el autoinicio: $($_.Exception.Message)"
   }
-}
 
-if ($SinNavegador) {
-  Write-Paso "Modo prueba (-SinNavegador): no se abre Edge."
-  exit 0
-}
+  # ------------------------------------------------- 5) Arranque automatico (una vez)
+  if ($SinAutoInicio) {
+    Write-Paso "Autoinicio de Windows sin cambios (-SinAutoInicio)."
+  } else {
+    try {
+      if (Registrar-AutoInicio) {
+        Write-Paso "Registrado en el autoinicio de Windows: desde el proximo encendido SerchTube se abre solo."
+        Write-Paso "  Acceso directo: $(Get-RutaAccesoInicio)"
+        Write-Paso "  Para desactivarlo: 'Quitar autoinicio de SerchTube.bat'"
+      } else {
+        Write-Paso "El autoinicio de Windows ya estaba configurado."
+      }
+    } catch {
+      Write-Aviso "No se pudo registrar el autoinicio: $($_.Exception.Message)"
+    }
+  }
 
-# --------------------------------------------------- 4) Una sola ventana ya abierta
-$abiertas = @(Get-VentanasSerchTube)
-if ($abiertas.Count -gt 0) {
-  Write-Paso "Ya hay una ventana de SerchTube abierta (PID $($abiertas[0].Id)). Se trae al frente; no se abre otra."
-  Set-FocoVentana $abiertas[0].MainWindowHandle
-  exit 0
-}
+  if ($SinNavegador) {
+    Write-Paso "Modo prueba (-SinNavegador): no se abre Edge."
+    exit 0
+  }
 
-# ------------------------------------------------------------- 5) Abrir Edge
-$edge = Get-EdgeExe
-if (-not $edge) {
-  Write-Aviso "No encontre msedge.exe. Abre Edge a mano en $Url"
+  # --------------------------------------------------- 6) Ya hay una ventana abierta
+  $procesos = @(Get-ProcesosSerchTube)
+  if ($procesos.Count -gt 0) {
+    Write-Paso "Ya hay un Edge de SerchTube abierto ($($procesos.Count) procesos). Esperando su ventana..."
+    for ($i = 0; $i -lt 30; $i++) {
+      $ventanas = @(Get-VentanasSerchTube)
+      if ($ventanas.Count -gt 0) {
+        Write-Paso "Ventana encontrada (PID $($ventanas[0].Id)). Se trae al frente; no se abre otra."
+        Set-FocoVentana $ventanas[0].MainWindowHandle
+        exit 0
+      }
+      if (@(Get-ProcesosSerchTube).Count -eq 0) { break }   # se cerro solo: seguimos
+      Start-Sleep -Seconds 1
+    }
+    if (@(Get-ProcesosSerchTube).Count -gt 0) {
+      Write-Aviso "El Edge de SerchTube sigue vivo pero sin ventana. NO se abre otro (eso es lo que mostraba el error del directorio de datos)."
+      Write-Aviso "Si no ves la app, ejecuta: 'Reparar perfil de Edge.bat'"
+      exit 0
+    }
+    Write-Paso "El proceso anterior termino; se abre uno nuevo."
+  }
+
+  # ------------------------------------------------------------- 7) Abrir Edge
+  $edge = Get-EdgeExe
+  if (-not $edge) {
+    Write-Aviso "No encontre msedge.exe. Abre Edge a mano en $Url"
+    exit 1
+  }
+
+  $usarPerfil = -not $PerfilNormal
+
+  function New-ArgumentosEdge {
+    $a = @('--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble',
+      '--hide-crash-restore-bubble', '--start-maximized')
+    if ($usarPerfil) { $a = @("--user-data-dir=$PerfilEdge") + $a }
+    if ($Modo -eq 'app') { $a += "--app=$Url" } else { $a += $Url }
+    if ($AutoconcederMicro) { $a += '--use-fake-ui-for-media-stream' }
+    return $a
+  }
+
+  for ($intento = 1; $intento -le 2; $intento++) {
+    if ($usarPerfil) {
+      $listo = $false
+      for ($i = 0; $i -lt 20 -and -not $listo; $i++) {
+        $listo = Test-PerfilEscribible
+        if (-not $listo) { Start-Sleep -Seconds 2 }
+      }
+      if (-not $listo) {
+        Write-Aviso "El perfil de Edge no se puede escribir todavia. Se autorepara."
+        Reset-PerfilEdge | Out-Null
+        if (-not (Test-PerfilEscribible)) {
+          Write-Aviso "Sigue sin poder escribirse el perfil. Usa -PerfilNormal o revisa permisos de $PerfilEdge"
+          exit 1
+        }
+      }
+    }
+
+    Write-Paso "Abriendo Edge (modo '$Modo', intento $intento) con perfil: $(if ($usarPerfil) { $PerfilEdge } else { 'normal (sin --user-data-dir)' })"
+    Start-Process -FilePath $edge -ArgumentList (New-ArgumentosEdge) | Out-Null
+
+    # Verificar que la ventana aparecio (si Edge se queja del perfil, no aparece)
+    $aparecio = $false
+    for ($i = 0; $i -lt 25; $i++) {
+      Start-Sleep -Seconds 1
+      if (@(Get-VentanasSerchTube).Count -gt 0) { $aparecio = $true; break }
+    }
+    if ($aparecio) {
+      Write-Paso "Listo. Ventana unica de SerchTube abierta."
+      exit 0
+    }
+
+    Write-Aviso "Edge no mostro la ventana en 25 s."
+    if ($intento -eq 1 -and $usarPerfil) {
+      Write-Aviso "Se autorepara el perfil (se aparta el actual y se crea uno limpio) y se reintenta."
+      if (-not (Reset-PerfilEdge)) { Write-Aviso "No se pudo apartar el perfil; se reintenta igual." }
+    }
+  }
+
+  Write-Aviso "No se pudo abrir la ventana de SerchTube. Prueba 'Reparar perfil de Edge.bat'."
   exit 1
+} finally {
+  if ($TengoElTurno) { try { $Candado.ReleaseMutex() } catch { } }
+  $Candado.Dispose()
 }
-
-$argumentos = @(
-  "--user-data-dir=$PerfilEdge",
-  '--no-first-run',
-  '--no-default-browser-check',
-  '--disable-session-crashed-bubble',
-  '--hide-crash-restore-bubble',
-  '--start-maximized'
-)
-if ($Modo -eq 'app') { $argumentos += "--app=$Url" } else { $argumentos += $Url }
-if ($AutoconcederMicro) { $argumentos += '--use-fake-ui-for-media-stream' }
-
-Write-Paso "Abriendo Edge en modo '$Modo' con perfil dedicado:"
-Write-Paso "  $PerfilEdge"
-Start-Process -FilePath $edge -ArgumentList $argumentos
-Write-Paso "Listo. Ventana unica de SerchTube abierta."

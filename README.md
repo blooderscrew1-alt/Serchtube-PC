@@ -69,5 +69,53 @@ Opciones:
 - `-AutoconcederMicro` → concede el micrófono automáticamente (modo kiosco/voz).
 - `-SinNavegador` → solo comprueba/arranca el servidor, sin abrir Edge.
 - `-SinAutoInicio` / `-QuitarAutoInicio` → no registrar / quitar del autoinicio.
+- `-RepararPerfil` → cierra ese Edge y aparta el perfil dañado (crea uno limpio).
+  También en `Reparar perfil de Edge.bat`.
+- `-PerfilNormal` → usa tu perfil habitual de Edge (sin `--user-data-dir`), plan B.
 - `-Puerto 3000`, `-PerfilEdge <ruta>`, `-EsperaServidor <segundos>`,
   `-RetardoSegundos <segundos>`.
+
+### Una sola ventana, sin errores de "directorio de datos"
+
+El lanzador evita el mensaje *"Microsoft Edge no puede leer ni escribir en el
+directorio de datos"*, que aparece cuando **dos** Edge abren el mismo perfil a la
+vez (típico al encender la PC: el autoinicio + Windows relanzando lo que estaba
+abierto). Para eso:
+
+- **Candado** (`Mutex`): si ya hay un arranque en curso, el segundo no hace nada.
+- Detecta cualquier Edge con nuestro perfil **aunque todavía no tenga ventana**
+  (antes se lanzaba un segundo por esa carrera) y espera a que aparezca.
+- **Preflight**: comprueba que el perfil exista y se pueda escribir *antes* de
+  abrir; si no, espera y reintenta.
+- **Verificación + autoreparación**: si la ventana no aparece en 25 s, cierra ese
+  Edge, aparta el perfil y reintenta con uno limpio.
+
+## Multi Mic Monitor: arranque a prueba de fallos
+
+`herramientas/multimic/` abre varios micrófonos a la vez. Al iniciar sesión,
+Windows todavía está levantando el audio y los drivers virtuales; abrir varios
+micrófonos ahí dejaba *streams* abiertos sin datos y el watchdog los reabría cada
+6 s. Esa insistencia atascaba el motor de audio y **todos los micrófonos quedaban
+sin volumen hasta reiniciar la PC**. Ahora:
+
+- Espera a que la lista de entradas esté **estable** (y a que `explorer` exista).
+- **Calienta** el motor de audio antes de abrir nada.
+- Abre los micrófonos **de a uno**, comprobando que entregan datos antes de seguir.
+- **No abre dispositivos virtuales** (Steam Streaming, VB-Cable, Voicemeeter…) en
+  el arranque, salvo que marques *"Abrir dispositivos virtuales al iniciar con
+  Windows"*. A mano los podés abrir siempre.
+- **Cuarentena**: un dispositivo que falla 4 veces seguidas se aísla y no se vuelve
+  a abrir solo (aparece `⚠ Desactivado: …`); se reactiva con `⏻ Activar`.
+- **Modo seguro**: si varios micrófonos se quedan sin datos a la vez, cierra todo,
+  espera 45 s y reabre de a uno, en lugar de martillar el dispositivo.
+- **Retroceso exponencial** en los reintentos (15 s → 30 → 60 → … máximo 5 min).
+- Cierra todo y libera PortAudio al salir (`atexit` incluido).
+- **Una sola copia**: un segundo ejecutable no arranca.
+
+Herramientas de recuperación (no hace falta reiniciar la PC):
+
+- `🛠 Reparar audio` (dentro de la app) o `herramientas/multimic/Reparar audio de Windows.bat`:
+  reinicia el servicio de audio de Windows (pide administrador).
+- `MultiMicMonitor.py --autotest`: prueba sin interfaz que los micrófonos
+  configurados entregan datos de verdad.
+- Traza completa en `%APPDATA%\MultiMicMonitor\multimic.log`.

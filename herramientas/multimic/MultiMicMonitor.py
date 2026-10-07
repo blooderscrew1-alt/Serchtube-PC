@@ -11,6 +11,21 @@ Esta versión no usa numpy (solo sounddevice).
 
 Uso:
     python multi_mic_monitor.py
+    python multi_mic_monitor.py --autotest [--con-virtuales]   (prueba sin interfaz)
+
+Arranque con Windows (--inicio lo pone la clave Run):
+    * Espera a que Windows termine de cargar el audio (lista de entradas estable).
+    * "Calienta" el motor de audio antes de abrir los micrófonos.
+    * Abre los micrófonos DE A UNO y comprueba que entregan datos antes de seguir.
+    * NO abre dispositivos virtuales/de streaming (Steam, VB-Cable, Voicemeeter…)
+      salvo que marques "Abrir dispositivos virtuales al iniciar con Windows".
+    * Un dispositivo que falla varias veces queda AISLADO: no se vuelve a abrir solo.
+    * Si varios micrófonos se quedan sin datos a la vez, entra en MODO SEGURO
+      (cierra todo, espera y reabre de a uno) en vez de martillar el dispositivo.
+    * Botón "🛠 Reparar audio": reinicia el servicio de audio de Windows sin
+      reiniciar la PC (también está en "Reparar audio de Windows.bat").
+
+Todo queda registrado en %APPDATA%\\MultiMicMonitor\\multimic.log
 """
 
 import importlib
@@ -124,6 +139,120 @@ import sounddevice as sd  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
+# Robustez (esto es lo que evita los micrófonos "mudos" al encender la PC)
+#
+# El fallo real: al iniciar sesión, Windows todavía está levantando el motor de
+# audio y los drivers virtuales (Steam Streaming, VB-Cable, etc.). Si se abren
+# varios micrófonos justo ahí, PortAudio/WASAPI deja streams "zombis" (abiertos
+# pero sin datos) y el watchdog los reabría cada 6 s. Esa insistencia sobre un
+# driver que aún no está listo es lo que atasca el motor de audio de Windows y
+# deja TODOS los micrófonos sin nivel hasta reiniciar.
+#
+# Ahora: se espera a que el audio esté estable, se calienta el motor, los
+# micrófonos se abren DE A UNO comprobando que entregan datos, los fallos se
+# frenan con retroceso exponencial, un dispositivo problemático se aísla solo
+# (cuarentena) y el arranque con Windows no abre dispositivos virtuales.
+# ---------------------------------------------------------------------------
+_DIR_CFG = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "MultiMicMonitor")
+LOG_PATH = os.path.join(_DIR_CFG, "multimic.log")
+
+# Dispositivos virtuales / de streaming: sus drivers casi nunca están listos en
+# el arranque. Se pueden abrir a mano, pero no solos al iniciar con Windows.
+VIRTUAL_HINTS = (
+    "steam streaming", "cable output", "cable input", "vb-audio", "voicemeeter",
+    "virtual", "asignador de sonido", "sound mapper", "stereo mix", "mezcla est",
+    "what u hear", "loopback", "sunshine", "nvidia broadcast", "obs virtual",
+    "controlador primario",
+)
+
+# Un micrófono que falla esto de veces seguidas se aísla y no se vuelve a abrir solo
+MAX_FALLOS = 4
+
+
+def es_virtual(nombre: str) -> bool:
+    n = (nombre or "").lower()
+    return any(p in n for p in VIRTUAL_HINTS)
+
+
+def _log(msg: str):
+    linea = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
+    try:
+        print(linea, flush=True)
+    except Exception:
+        pass
+    try:
+        os.makedirs(_DIR_CFG, exist_ok=True)
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 400_000:
+            try:
+                os.replace(LOG_PATH, LOG_PATH + ".1")
+            except OSError:
+                os.remove(LOG_PATH)
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(linea + "\n")
+    except OSError:
+        pass
+
+
+_MUTEX = None
+
+
+def instancia_unica() -> bool:
+    """False si ya hay otra copia abierta: dos copias peleando por los mismos
+    micrófonos es otra forma de dejar el audio atascado."""
+    global _MUTEX
+    try:
+        import ctypes
+        _MUTEX = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\MultiMicMonitor_SerchTube")
+        if not _MUTEX:
+            return True
+        return ctypes.windll.kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+    except Exception:
+        return True
+
+
+def _instantanea_entradas():
+    """Lista de entradas del sistema (para saber cuándo dejó de cambiar)."""
+    try:
+        return tuple((d["name"], d["hostapi"])
+                     for d in sd.query_devices() if d["max_input_channels"] > 0)
+    except Exception:
+        return None
+
+
+def calentar_motor_de_audio():
+    """Abre y cierra el micrófono predeterminado para despertar el motor de audio
+    de Windows antes de abrir los micrófonos reales (evita streams zombis)."""
+    try:
+        idx = sd.default.device[0]
+        if idx is None or int(idx) < 0:
+            return
+        info = sd.query_devices(int(idx))
+        s = sd.RawInputStream(device=int(idx),
+                              samplerate=int(info["default_samplerate"]),
+                              channels=1, dtype="int16")
+        s.start()
+        time.sleep(0.6)
+        s.stop()
+        s.close()
+        _log("Calentamiento del motor de audio: OK.")
+    except Exception as e:
+        _log(f"Calentamiento del motor de audio: no se pudo ({e}).")
+
+
+def _soltar_audio():
+    """Suelta PortAudio al salir del programa (aunque se cierre de forma brusca)."""
+    try:
+        sd._terminate()
+    except Exception:
+        pass
+
+
+import atexit  # noqa: E402
+
+atexit.register(_soltar_audio)
+
+
+# ---------------------------------------------------------------------------
 # Audio (sin numpy: enteros de 16 bits con array/deque de la biblioteca estándar)
 # ---------------------------------------------------------------------------
 def to_mono(raw, ch: int) -> array:
@@ -195,6 +324,9 @@ class Mic:
         self.keep = 0
         self.ring = None
         self.stream = None
+        self.row = None           # fila de la interfaz asociada (para poder avisar)
+        self.fail_count = 0       # fallos seguidos del dispositivo
+        self.quarantined = False  # aislado: no se vuelve a abrir solo
 
     def _cb(self, indata, frames, time_info, status):
         try:
@@ -236,10 +368,12 @@ class Mic:
         last = None
         for rate, extra in attempts:
             try:
+                # Sin latency="low": en WASAPI compartido los buffers mínimos
+                # provocan cortes y abren/cierran el motor de audio de más.
                 self.ratio = out_rate / rate
                 s = sd.RawInputStream(
                     device=self.index, samplerate=rate, channels=self.ch, dtype="int16",
-                    latency="low", extra_settings=extra, callback=self._cb,
+                    extra_settings=extra, callback=self._cb,
                 )
                 try:
                     s.start()
@@ -430,9 +564,17 @@ class App(tk.Tk):
         self.cfg = load_config()
         self._boot_retries = 0
         self._save_job = None
+        # estado de la apertura en serie / modo seguro
+        self._cola_auto = []
+        self._errores_auto = []
+        self._audio_snap = None
+        self._audio_estable = 0
+        self._audio_espera = 0
+        self._safe_until = 0.0
         self.startup_var = tk.BooleanVar(value=startup_enabled())
         self.min_var = tk.BooleanVar(value=bool(self.cfg.get("minimized", False)))
         self.rl_var = tk.BooleanVar(value=bool(self.cfg.get("remember_listen", False)))
+        self.virt_var = tk.BooleanVar(value=bool(self.cfg.get("abrir_virtuales", False)))
         self.master_gain = float(self.cfg.get("master_gain", 1.0))   # volumen maestro de la mezcla
         self.ontop_var = tk.BooleanVar(value=bool(self.cfg.get("always_on_top", False)))
         if self.startup_var.get():  # mantiene al día la ruta registrada si moviste el archivo
@@ -541,6 +683,9 @@ class App(tk.Tk):
         tip(b_mut, "Quita el sonido de la mezcla hacia las bocinas/cable, pero deja los mics abiertos (los medidores siguen activos).")
         b_diag = make_button(bottom, "ℹ Diagnóstico", self.show_diag); b_diag.pack(side="right")
         tip(b_diag, "Datos técnicos: versión de Python, librería de audio, dispositivos detectados. Útil si algo no funciona.")
+        b_fix = make_button(bottom, "🛠 Reparar audio", self.reparar_audio, bg="#3a2f16")
+        b_fix.pack(side="right", padx=6)
+        tip(b_fix, "Si los micrófonos dejaron de registrar volumen, reinicia el servicio de audio de Windows (pide permiso de administrador). Así no tenés que reiniciar la PC.")
         b_guia = make_button(bottom, "🎙 Guía Asistente (VB-Cable)", self.show_assistant_guide, bg="#12324f"); b_guia.pack(side="right", padx=6)
         tip(b_guia, "Pasos para que SerchTube escuche TODOS tus mics a la vez usando el cable virtual. Si VB-Cable ya está instalado, te ofrece poner la salida con un clic.")
 
@@ -571,19 +716,28 @@ class App(tk.Tk):
                                    fg=COL["fg"], font=("Segoe UI", 9, "bold"), width=5)
         self.master_lbl.pack(side="left", padx=(6, 0))
 
+        opts4 = tk.Frame(self, bg=bg)
+        opts4.pack(fill="x", padx=14, pady=(0, 0))
+        c_virt = make_check(opts4, "🎛 Abrir dispositivos virtuales al iniciar con Windows",
+                            self.virt_var, self._remember)
+        c_virt.pack(side="left")
+        tip(c_virt, "Los dispositivos virtuales (Steam Streaming, VB-Cable, Voicemeeter, Sunshine…) muchas veces no están listos al encender la PC: abrirlos ahí es lo que dejaba los micrófonos sin volumen. Dejalo DESMARCADO salvo que los necesites en el arranque. Igual podés abrirlos a mano cuando quieras.")
+
         self.status = tk.Label(self, text="Todo apagado.", bg=bg, fg=COL["muted"],
                                font=("Segoe UI", 9), anchor="w")
         self.status.pack(fill="x", padx=14, pady=(2, 10))
-
     # ---------- Dispositivos ----------
     def refresh_devices(self):
         if self.active_mics:
             return
-        try:  # forzar a PortAudio a releer los dispositivos
-            sd._terminate()
-            sd._initialize()
-        except Exception:
-            pass
+        if self.out_stream is None:
+            # Releer dispositivos con PortAudio SOLO si no hay ningún stream abierto:
+            # terminar/reiniciar PortAudio con streams vivos deja WASAPI colgado.
+            try:
+                sd._terminate()
+                sd._initialize()
+            except Exception:
+                pass
 
         for w in self.list_frame.winfo_children():
             w.destroy()
@@ -654,7 +808,18 @@ class App(tk.Tk):
             "mic": mic, "status": status, "status_txt": "", "auto": auto_var,
             "alias": alias, "boost_i": boost_i, "want_listen": bool(saved.get("listen", False)),
             "head": head, "name_lbl": name_lbl, "edit_btn": edit_btn, "editing": False,
+            "virtual": es_virtual(mic.name),
         }
+        mic.row = row
+        # Si este dispositivo ya falló antes, no se vuelve a abrir solo hasta que
+        # el usuario lo pida a mano (así un driver roto no vuelve a dejar el audio mudo).
+        cuarentena = self.cfg.get("cuarentena")
+        if isinstance(cuarentena, dict) and mic.name in cuarentena:
+            mic.quarantined = True
+            auto_var.set(False)
+            info_cuar = cuarentena[mic.name]
+            motivo = info_cuar.get("motivo", "falló antes") if isinstance(info_cuar, dict) else "falló antes"
+            status.config(text=f"⚠ Aislado: {motivo}", fg=COL["amber"])
         edit_btn.bind("<Button-1>", lambda e, r=row: self._rename(r))
         name_lbl.bind("<Double-Button-1>", lambda e, r=row: self._rename(r))
         tip(name_lbl, "Nombre real del dispositivo. Doble clic (o la ✎) para ponerle un apodo, ej: 'Micro cocina'.")
@@ -859,6 +1024,13 @@ class App(tk.Tk):
     def on_active_toggle(self, row: dict):
         mic = row["mic"]
         if mic.stream is None:  # activar
+            # El usuario lo pide a mano: se quita el aislamiento y se reintenta limpio
+            mic.quarantined = False
+            mic.fail_count = 0
+            mic.retry_at = 0.0
+            cuar = self.cfg.get("cuarentena")
+            if isinstance(cuar, dict):
+                cuar.pop(mic.name, None)
             err = self._activate(row)
             if err:
                 messagebox.showerror(
@@ -904,11 +1076,37 @@ class App(tk.Tk):
         self._after_change()
         self._remember()
 
-    # ---------- Inicio automático y configuración ----------
+    # ---------- Inicio automático (seguro) y configuración ----------
     def _autostart_boot(self):
-        if STARTUP_LAUNCH:  # relee los dispositivos por si el audio terminó de cargar después
+        if STARTUP_LAUNCH:
+            _log("Arranque con Windows: esperando a que el audio esté listo...")
+            self._audio_snap = None
+            self._audio_estable = 0
+            self._audio_espera = 0
+            self._esperar_audio_y_arrancar()
+        else:
+            self._autostart()
+
+    def _esperar_audio_y_arrancar(self):
+        """Sin bloquear la ventana: espera a que la lista de entradas deje de cambiar."""
+        snap = _instantanea_entradas()
+        if snap and snap == self._audio_snap:
+            self._audio_estable += 1
+        else:
+            self._audio_estable = 0
+        self._audio_snap = snap
+        self._audio_espera += 1
+        if (snap and self._audio_estable >= 2) or self._audio_espera > 60:   # ~3 s o 90 s máximo
+            _log(f"Audio estable tras {self._audio_espera * 1.5:.0f}s "
+                 f"({len(snap) if snap else 0} entradas).")
             self.refresh_devices()
-        self._autostart()
+            calentar_motor_de_audio()
+            self._autostart()
+            return
+        self.status.config(
+            text=f"Esperando a que Windows termine de cargar el audio… ({int(self._audio_espera * 1.5)}s)",
+            fg=COL["amber"])
+        self.after(1500, self._esperar_audio_y_arrancar)
 
     def _on_startup_change(self):
         try:
@@ -922,21 +1120,109 @@ class App(tk.Tk):
         self._remember()
 
     def _autostart(self):
-        errores = []
+        """Abre los micrófonos marcados 'Iniciar al abrir' DE A UNO y comprobando
+        que entregan datos: abrirlos todos a la vez es lo que atasca el motor de
+        audio de Windows cuando la PC acaba de encender."""
+        self._errores_auto = []
+        self._cola_auto = []
         for row in self.rows:
-            if row["auto"].get() and row["mic"].stream is None:
-                err = self._activate(row)
-                if err:
-                    errores.append(f"- {self._display(row)}: {err}")
-                elif self.rl_var.get() and row["want_listen"]:
-                    self._set_listening(row, True)
-        self._after_change()
-        if errores:
+            if not row["auto"].get() or row["mic"].stream is not None:
+                continue
+            mic = row["mic"]
+            if mic.quarantined:
+                self._set_status(row, "⚠ Aislado: no se abre solo", COL["amber"])
+                continue
+            if STARTUP_LAUNCH and not self.virt_var.get() and row.get("virtual"):
+                _log(f"No se abre '{mic.name}' al iniciar: dispositivo virtual "
+                     "(su driver no está listo al encender la PC).")
+                self._set_status(row, "🎛 Virtual: no se abre al iniciar", COL["muted"])
+                continue
+            self._cola_auto.append(row)
+        if self._cola_auto:
+            _log("Abriendo de a uno: " + ", ".join(r["mic"].name for r in self._cola_auto))
+        self._abrir_siguiente()
+
+    def _abrir_siguiente(self):
+        if not self._cola_auto:
+            self._after_change()
+            self._avisar_errores_auto()
+            return
+        row = self._cola_auto.pop(0)
+        err = self._activate(row)
+        if err:
+            self._errores_auto.append(f"- {self._display(row)}: {err}")
+            _log(f"No se pudo abrir '{row['mic'].name}': {err}")
+            self.after(700, self._abrir_siguiente)
+            return
+        self._set_status(row, "● Comprobando…", COL["amber"])
+        self._comprobar_arranque(row, 0)
+
+    def _comprobar_arranque(self, row, intentos: int):
+        """Confirma que el micrófono entrega datos ANTES de abrir el siguiente."""
+        mic = row["mic"]
+        if mic.stream is None or mic.quarantined:
+            self.after(400, self._abrir_siguiente)
+            return
+        if time.time() - mic.last_cb < 1.5:      # el callback llega (aunque sea silencio)
+            if self.rl_var.get() and row["want_listen"]:
+                self._set_listening(row, True)
+            self.after(1200, self._abrir_siguiente)
+            return
+        if intentos >= 3:                        # ~4,5 s sin datos: cerrar y aislar
+            self._cerrar_mic(row, "no entregó datos al abrir")
+            self.after(900, self._abrir_siguiente)
+            return
+        self.after(1500, lambda: self._comprobar_arranque(row, intentos + 1))
+
+    def _avisar_errores_auto(self):
+        errores = getattr(self, "_errores_auto", [])
+        if not errores:
+            return
+        if STARTUP_LAUNCH:
+            _log("Micrófonos que no se pudieron abrir al iniciar:\n" + "\n".join(errores))
+            self.status.config(text="⚠ Algunos micrófonos no se abrieron: mira Diagnóstico",
+                               fg=COL["amber"])
+        else:
             messagebox.showwarning(
-                "Algunos micrófonos no se pudieron activar",
+                "Algunos micrófonos no se pudieron abrir",
                 "\n".join(errores) + "\n\nRevisa que Windows permita el acceso al micrófono "
                 "(Configuración > Privacidad > Micrófono) y que ningún otro programa lo use.",
             )
+
+    def _cerrar_mic(self, row, motivo: str):
+        mic = row["mic"]
+        try:
+            mic.stop()
+        except Exception:
+            pass
+        self.active_mics = [m for m in self.active_mics if m is not mic]
+        self.listen_mics = [m for m in self.listen_mics if m is not mic]
+        try:
+            row["btn_act"].config(text="⏻  Activar", bg=COL["card2"], fg=COL["fg"])
+            row["btn_lis"].config(state="disabled", text="🔇 Silenciado",
+                                  bg=COL["card2"], fg=COL["fg"])
+        except Exception:
+            pass
+        self._cuarentena(row, motivo)
+
+    def _cuarentena(self, row, motivo: str):
+        """Aísla un dispositivo problemático para que no vuelva a tumbar el audio."""
+        mic = row["mic"]
+        mic.quarantined = True
+        mic.fail_count = max(mic.fail_count, MAX_FALLOS)
+        try:
+            row["auto"].set(False)
+        except Exception:
+            pass
+        self._set_status(row, "⚠ Desactivado: " + motivo, COL["red"])
+        cuar = self.cfg.get("cuarentena")
+        if not isinstance(cuar, dict):
+            cuar = {}
+            self.cfg["cuarentena"] = cuar
+        cuar[mic.name] = {"motivo": motivo, "cuando": time.time()}
+        self._remember()
+        _log(f"Mic aislado '{mic.name}': {motivo}. No se abrirá solo; "
+             "actívalo a mano y revisa cable, permisos o driver.")
 
     def _on_gain(self, mic: Mic, value):
         mic.gain = float(value)
@@ -955,6 +1241,7 @@ class App(tk.Tk):
         self.cfg["output"] = self.out_var.get()
         self.cfg["minimized"] = bool(self.min_var.get())
         self.cfg["remember_listen"] = bool(self.rl_var.get())
+        self.cfg["abrir_virtuales"] = bool(self.virt_var.get())
         self.cfg["master_gain"] = round(self.master_gain, 2)
         self.cfg["always_on_top"] = bool(self.ontop_var.get())
         if self._save_job:
@@ -1015,12 +1302,26 @@ class App(tk.Tk):
 
     # ---------- Watchdog de dispositivos (arranque de Windows) ----------
     def _watchdog_restart(self, mic: Mic):
-        """Al encender la PC los streams a veces quedan zombis (abiertos pero sin
-        datos). Reabrir el mic y, si estaba sonando, también la salida."""
+        """Reabre un micrófono cuyos datos se cortaron, con FRENO exponencial.
+        Insistir sobre un dispositivo que falla es justo lo que dejaba el motor de
+        audio de Windows atascado y los micrófonos mudos hasta reiniciar: por eso
+        tras varios fallos seguidos el dispositivo se aísla y se deja en paz."""
         now = time.time()
-        if now < mic.retry_at:
+        if mic.quarantined or now < mic.retry_at:
             return
-        mic.retry_at = now + 6.0  # máximo un intento cada 6 segundos por micro
+        mic.fail_count += 1
+        mic.retry_at = now + min(300.0, 15.0 * (2 ** min(mic.fail_count - 1, 4)))
+
+        if mic.fail_count >= MAX_FALLOS:
+            if mic.row is not None:
+                self._cerrar_mic(mic.row, f"falló {mic.fail_count} veces seguidas")
+            else:
+                try:
+                    mic.stop()
+                except Exception:
+                    pass
+            return
+
         was_listening = mic.listening
         try:
             mic.stop()
@@ -1031,8 +1332,13 @@ class App(tk.Tk):
         try:
             mic.start(self.out_rate)
             mic.last_cb = time.time()
-            if was_listening or self.listen_mics:
-                # resincronizar la salida: cerrarla y volverla a abrir
+            _log(f"Mic reiniciado: {mic.name} (intento {mic.fail_count}, "
+                 f"próximo reintento en {int(mic.retry_at - now)}s si falla)")
+            if was_listening:
+                mic.listening = True
+                if mic not in self.listen_mics:
+                    self.listen_mics = self.listen_mics + [mic]
+                mic.ring.clear()
                 if self.out_stream:
                     try:
                         self.out_stream.stop()
@@ -1040,15 +1346,97 @@ class App(tk.Tk):
                     except Exception:
                         pass
                     self.out_stream = None
-                if was_listening:
-                    mic.listening = True
-                    if mic not in self.listen_mics:
-                        self.listen_mics = self.listen_mics + [mic]
-                    mic.ring.clear()
-                    self._ensure_output()
-            print(f"[Watchdog] Mic reiniciado: {mic.name}")
+                self._ensure_output()
         except Exception as e:
-            print(f"[Watchdog] Fallo al reiniciar {mic.name}: {e}")
+            _log(f"Fallo al reiniciar {mic.name} (intento {mic.fail_count}): {e}")
+
+    def _modo_seguro(self, motivo: str):
+        """Varios micrófonos sin datos a la vez = el motor de audio de Windows está
+        atascado. En vez de martillarlo, se cierra TODO, se espera y se reabre de a uno."""
+        now = time.time()
+        if now < self._safe_until:
+            return
+        self._safe_until = now + 75.0
+        _log(f"MODO SEGURO: {motivo}. Se cierran todos los micrófonos y se reabrirán "
+             "de a uno en 45 s.")
+        self._cola_auto = []
+        for row in self.rows:
+            mic = row["mic"]
+            if mic.stream is not None:
+                try:
+                    mic.stop()
+                except Exception:
+                    pass
+            mic.stream = None
+            mic.listening = False
+            mic.fail_count = 0
+            mic.retry_at = 0.0
+            mic.level = 0.0
+            try:
+                row["btn_act"].config(text="⏻  Activar", bg=COL["card2"], fg=COL["fg"])
+                row["btn_lis"].config(state="disabled", text="🔇 Silenciado",
+                                      bg=COL["card2"], fg=COL["fg"])
+            except Exception:
+                pass
+        self.active_mics = []
+        self.listen_mics = []
+        if self.out_stream:
+            try:
+                self.out_stream.stop()
+                self.out_stream.close()
+            except Exception:
+                pass
+            self.out_stream = None
+        self._after_change()
+        self.status.config(text="🛠 Modo seguro: el audio de Windows se atascó. "
+                                "Reintentando de a uno en 45 s…", fg=COL["amber"])
+        self.after(45000, self._reintentar_todo)
+
+    def _reintentar_todo(self):
+        _log("Modo seguro: reintentando abrir los micrófonos de a uno.")
+        calentar_motor_de_audio()
+        self._autostart()
+
+    # ---------- Reparación de emergencia (sin reiniciar la PC) ----------
+    def reparar_audio(self):
+        """Reinicia el servicio de audio de Windows. Es la salida de emergencia si el
+        motor de audio quedó atascado y los micrófonos no registran volumen."""
+        if not messagebox.askyesno(
+            "Reparar el audio de Windows",
+            "Se reiniciará el servicio de audio de Windows (Windows Audio).\n"
+            "Pedirá permiso de administrador y el sonido se cortará 1-2 segundos.\n\n"
+            "Úsalo si los micrófonos no registran volumen.\n\n¿Continuar?"
+        ):
+            return
+        self._cola_auto = []
+        for row in list(self.rows):        # cerrar todo ANTES de tocar el servicio
+            if row["mic"].stream is not None:
+                try:
+                    self.on_active_toggle(row)
+                except Exception:
+                    pass
+        try:
+            if self.out_stream:
+                self.out_stream.stop()
+                self.out_stream.close()
+        except Exception:
+            pass
+        self.out_stream = None
+        try:
+            import ctypes
+            guion = ("Start-Sleep -Seconds 1; Restart-Service -Name Audiosrv -Force; "
+                     "Start-Sleep -Seconds 3; "
+                     "Restart-Service -Name AudioEndpointBuilder -Force -ErrorAction SilentlyContinue")
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", "powershell.exe",
+                '-NoProfile -ExecutionPolicy Bypass -Command "%s"' % guion, None, 1)
+            _log("Reparación de audio: reiniciando el servicio Windows Audio.")
+            self.status.config(text="🛠 Reiniciando el audio de Windows… se reintentará solo.",
+                               fg=COL["amber"])
+            self._safe_until = time.time() + 20.0
+            self.after(15000, self._reintentar_todo)
+        except Exception as e:
+            messagebox.showerror("No se pudo reparar el audio", str(e))
 
     # ---------- Diagnóstico ----------
     def show_diag(self):
@@ -1078,6 +1466,14 @@ class App(tk.Tk):
 
     def _tick(self):
         now = time.time()
+        # Varios micrófonos sin datos A LA VEZ = el motor de audio de Windows está
+        # atascado (típico al encender la PC). En vez de reiniciarlos todos en bucle,
+        # se pasa a modo seguro: cerrar todo, esperar y reabrir de a uno.
+        sin_datos = [r for r in self.rows
+                     if r["mic"].stream is not None and now - r["mic"].last_cb > 3.0]
+        if len(sin_datos) >= 2 and max(r["mic"].fail_count for r in sin_datos) >= 1:
+            self._modo_seguro(f"{len(sin_datos)} micrófonos sin datos a la vez")
+
         for row in self.rows:
             m = row["mic"]
             meter = row["meter"]
@@ -1085,7 +1481,10 @@ class App(tk.Tk):
                 meter.coords(row["bar"], 0, 0, 0, METER_H)
                 meter.coords(row["hold"], 0, 0, 0, METER_H)
                 row["db"].config(text="")
-                self._set_status(row, "Apagado", COL["muted"])
+                if m.quarantined:
+                    self._set_status(row, "⚠ Aislado: no se abre solo", COL["amber"])
+                else:
+                    self._set_status(row, "Apagado", COL["muted"])
                 continue
 
             lvl, m.level = m.level, m.level * 0.6
@@ -1106,22 +1505,124 @@ class App(tk.Tk):
             row["db"].config(text=txt)
 
             if now - m.last_cb > 3.0:
-                self._set_status(row, "⚠ Sin datos: reiniciando automáticamente...", COL["red"])
+                self._set_status(row, "⚠ Sin datos: reintentando…", COL["red"])
                 self._watchdog_restart(m)
-            elif now - m.heard_at < 3.0:
-                self._set_status(row, "● Señal detectada", COL["green"])
             else:
-                self._set_status(row, "● Activo · en silencio", COL["muted"])
+                m.fail_count = 0          # el dispositivo está sano: se limpia el freno
+                m.retry_at = 0.0
+                if now - m.heard_at < 3.0:
+                    self._set_status(row, "● Señal detectada", COL["green"])
+                else:
+                    self._set_status(row, "● Activo · en silencio", COL["muted"])
         self.after(80, self._tick)
 
     def _on_close(self):
         self._remember()
         save_config(self.cfg)
-        self.deactivate_all()
+        try:
+            self.deactivate_all()          # cierra los micrófonos (libera WASAPI)
+        except Exception:
+            pass
+        try:
+            if self.out_stream:
+                self.out_stream.stop()
+                self.out_stream.close()
+        except Exception:
+            pass
+        self.out_stream = None
+        try:
+            sd._terminate()                # libera PortAudio y sus objetos COM
+        except Exception:
+            pass
+        _log("Cerrado: dispositivos liberados.")
         self.destroy()
 
 
+def _autotest() -> int:
+    """Autoprueba por consola (no abre la ventana): comprueba que los micrófonos
+    marcados 'Iniciar al abrir' entregan datos y cierra todo limpiamente.
+    Uso:  python MultiMicMonitor.py --autotest [--con-virtuales]"""
+    print("Multi Mic Monitor - autoprueba (sin interfaz)")
+    con_virtuales = "--con-virtuales" in sys.argv
+    cfg = load_config()
+    hostapis = sd.query_hostapis()
+    wasapi = next((i for i, h in enumerate(hostapis) if "WASAPI" in h["name"]), None)
+    if wasapi is None:
+        print("No hay WASAPI disponible.")
+        return 1
+
+    t0, prev, estable = time.time(), None, 0
+    while time.time() - t0 < 60:
+        snap = _instantanea_entradas()
+        if snap and snap == prev:
+            estable += 1
+            if estable >= 2:
+                break
+        else:
+            estable = 0
+            prev = snap
+        time.sleep(1.5)
+    print(f"1) Entradas estables: {len(prev or [])} (tras {time.time() - t0:.1f}s)")
+
+    calentar_motor_de_audio()
+
+    devs = sd.query_devices()
+    outs = [(i, d) for i, d in enumerate(devs)
+            if d["max_output_channels"] > 0 and d["hostapi"] == wasapi]
+    out_rate = int(outs[0][1]["default_samplerate"]) if outs else 48000
+
+    probados, fallos = 0, []
+    for i, d in enumerate(devs):
+        if d["max_input_channels"] <= 0 or d["hostapi"] != wasapi:
+            continue
+        guardado = (cfg.get("mics") or {}).get(d["name"], {})
+        if not isinstance(guardado, dict) or not guardado.get("auto", False):
+            continue
+        if es_virtual(d["name"]) and not con_virtuales:
+            print(f"   - {d['name']}: OMITIDO (virtual; con --con-virtuales se prueba igual)")
+            continue
+        m = Mic(i, d, True)
+        try:
+            m.start(out_rate)
+        except Exception as e:
+            print(f"   - {d['name']}: ERROR al abrir: {e}")
+            fallos.append(d["name"])
+            continue
+        t1 = time.time()
+        while time.time() - t1 < 2.0:
+            time.sleep(0.1)
+        ok = m.last_cb > t1
+        print(f"   - {d['name']}: {'datos OK' if ok else 'SIN DATOS'} (pico {m.level:.3f})")
+        try:
+            m.stop()
+        except Exception:
+            pass
+        probados += 1
+        if not ok:
+            fallos.append(d["name"])
+        time.sleep(1.0)
+
+    try:
+        sd._terminate()
+    except Exception:
+        pass
+    print(f"RESULTADO: probados={probados} fallos={len(fallos)}"
+          + ("" if not fallos else " -> " + " | ".join(fallos)))
+    return 0 if (probados and not fallos) else 1
+
+
 if __name__ == "__main__":
+    if not instancia_unica():
+        _log("Ya hay otra copia de Multi Mic Monitor abierta; esta no se inicia.")
+        if not STARTUP_LAUNCH:
+            _r = tk.Tk()
+            _r.withdraw()
+            messagebox.showinfo("Multi Mic Monitor",
+                                "Ya hay una copia abierta (mirá la barra de tareas).")
+            _r.destroy()
+        sys.exit(0)
+    if "--autotest" in sys.argv:
+        sys.exit(_autotest())
     try:
         App().mainloop()
     except Exception:
@@ -1131,6 +1632,10 @@ if __name__ == "__main__":
                                    "multi_mic_monitor_error.txt"), "w", encoding="utf-8") as f:
                 f.write(err)
         except OSError:
+            pass
+        try:
+            _log("ERROR al iniciar: " + err.splitlines()[-1])
+        except Exception:
             pass
         _root = tk.Tk()
         _root.withdraw()
