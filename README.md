@@ -40,13 +40,34 @@ El lanzador ([scripts/start-serchtube.ps1](scripts/start-serchtube.ps1)):
 3. Si ya hay una ventana de SerchTube abierta con ese perfil, la trae al frente
    y **no abre otra**, así que puedes ejecutarlo cuantas veces quieras
    (arranque de Windows, doble clic, script propio).
+4. Registra SerchTube en el **autoinicio de Windows** la primera vez que lo
+   ejecutas (una sola vez; después no toca nada más).
+
+## Arranque automático al encender la PC
+
+Con la primera ejecución manual del `.bat` ya queda todo listo: el lanzador crea
+un acceso directo en la carpeta **Inicio** del usuario
+(`shell:startup\SerchTube Music.lnk`) que apunta a
+[scripts/start-serchtube-silencioso.vbs](scripts/start-serchtube-silencioso.vbs).
+Ese guion lanza el `.ps1` **sin ninguna ventana de consola**, espera 15 segundos
+a que Windows termine de iniciar sesión, arranca el servidor si hace falta y abre
+la única ventana de Edge. Ya no hay que abrir nada a mano ni apuntar accesos
+directos propios.
+
+- Desactivarlo: doble clic en `Quitar autoinicio de SerchTube.bat`
+  (o `-QuitarAutoInicio`). Se puede volver a activar volviendo a ejecutar el
+  `.bat` de arranque.
+- No registrarlo nunca: `-SinAutoInicio`.
+- Cambiar la espera del arranque: `-RetardoSegundos 25`.
+- Traza de cada arranque: `logs/lanzador.log` (y `logs/servidor.log`).
+- La entrada aparece en **Administrador de tareas → Aplicaciones de inicio** como
+  `SerchTube Music`, y se puede desactivar también desde ahí.
 
 Opciones:
 
 - `-Modo pestana` → una pestaña normal en lugar de la ventana en modo app.
 - `-AutoconcederMicro` → concede el micrófono automáticamente (modo kiosco/voz).
 - `-SinNavegador` → solo comprueba/arranca el servidor, sin abrir Edge.
-- `-Puerto 3000`, `-PerfilEdge <ruta>`, `-EsperaServidor <segundos>`.
-
-Para el arranque automático, apunta tu acceso directo o script de la PC al
-`.bat` (o al `.ps1`) en lugar de abrir Edge a mano.
+- `-SinAutoInicio` / `-QuitarAutoInicio` → no registrar / quitar del autoinicio.
+- `-Puerto 3000`, `-PerfilEdge <ruta>`, `-EsperaServidor <segundos>`,
+  `-RetardoSegundos <segundos>`.
