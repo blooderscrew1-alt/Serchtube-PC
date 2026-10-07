@@ -23,6 +23,19 @@ if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
 }
 
 function SleepScreen({ onReactivate }: { onReactivate: () => void }) {
+  const [aviso, setAviso] = useState('');
+
+  // Las pestañas restauradas por Edge no siempre pueden cerrarse solas:
+  // se intenta y, si el navegador lo bloquea, se avisa cómo cerrarla.
+  const cerrarPestana = () => {
+    try {
+      window.close();
+    } catch (_) {}
+    setTimeout(() => {
+      setAviso('El navegador no dejó cerrarla sola: usa Ctrl+W para cerrar esta pestaña.');
+    }, 500);
+  };
+
   return (
     <div style={{
       minHeight: '100vh', background: '#000', color: '#e5e7eb',
@@ -36,16 +49,29 @@ function SleepScreen({ onReactivate }: { onReactivate: () => void }) {
         Esta pestaña quedó en modo reposo para evitar que el asistente procese
         los comandos dos veces (micrófono y respuesta de voz duplicados).
       </p>
-      <button
-        onClick={onReactivate}
-        style={{
-          background: '#dc2626', color: '#fff', border: 'none',
-          padding: '10px 22px', borderRadius: 12, fontSize: 14,
-          fontWeight: 700, cursor: 'pointer'
-        }}
-      >
-        Usar SerchTube en esta pestaña
-      </button>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <button
+          onClick={onReactivate}
+          style={{
+            background: '#dc2626', color: '#fff', border: 'none',
+            padding: '10px 22px', borderRadius: 12, fontSize: 14,
+            fontWeight: 700, cursor: 'pointer'
+          }}
+        >
+          Usar SerchTube en esta pestaña
+        </button>
+        <button
+          onClick={cerrarPestana}
+          style={{
+            background: 'transparent', color: '#e5e7eb', border: '1px solid #4b5563',
+            padding: '10px 22px', borderRadius: 12, fontSize: 14,
+            fontWeight: 700, cursor: 'pointer'
+          }}
+        >
+          Cerrar esta pestaña
+        </button>
+      </div>
+      {aviso && <p style={{ color: '#f59e0b', maxWidth: 420, margin: 0 }}>{aviso}</p>}
     </div>
   );
 }
