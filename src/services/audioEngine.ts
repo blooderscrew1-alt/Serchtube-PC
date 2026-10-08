@@ -20,6 +20,8 @@ export class AudioEngine {
   private duckingWatchdogTimer: any = null;
   private originalVolumeBeforeDucking = 100;
   private duckingEnabled = true;
+  // Volumen al que baja la musica durante el ducking, en % (0 = silencio total)
+  private duckingVolume = 0;
   private onDuckingChangeCallback?: (isDucked: boolean, duckedVolume: number) => void;
 
   private constructor() {
@@ -207,6 +209,20 @@ export class AudioEngine {
     this.duckingEnabled = enabled;
   }
 
+  /**
+   * Volumen de la musica durante el ducking, en % (0-100 en pasos de 10).
+   * 0 = silencio total (predeterminado); 100 = sin atenuacion.
+   */
+  public setDuckingVolume(volume: number) {
+    const numero = Number(volume);
+    const paso = isNaN(numero) ? 0 : Math.round(numero / 10) * 10;
+    this.duckingVolume = Math.min(100, Math.max(0, paso));
+  }
+
+  public getDuckingVolume(): number {
+    return this.duckingVolume;
+  }
+
   public startDucking(currentVolume: number) {
     if (!this.duckingEnabled) return;
     if (this.isDucked) return;
@@ -214,9 +230,10 @@ export class AudioEngine {
     this.isDucked = true;
     this.originalVolumeBeforeDucking = currentVolume;
 
-    // Silencio TOTAL (0%): el microfono de la PC llega a confundir palabras de la
-    // musica con comandos; con 20% todavia se colaban. Se restaura al terminar.
-    const duckedVol = 0;
+    // El volumen lo elige el usuario en Ajustes > Atenuacion Inteligente (por
+    // defecto 0% = silencio total: el microfono de la PC llega a confundir palabras
+    // de la musica con comandos). Se restaura al terminar de hablar.
+    const duckedVol = this.duckingVolume;
     this.onDuckingChangeCallback?.(true, duckedVol);
 
     // Watchdog: Clear ducking after 7 seconds unconditionally in case speech recognition hangs

@@ -2151,7 +2151,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
             icon={<Volume2 size={16} />}
             summary={
               speechConfig.duckingEnabled
-                ? "Baja automáticamente el volumen de la música al 20% al hablar o responder, y lo restaura sin demora"
+                ? `Baja automáticamente la música al ${speechConfig.duckingVolume ?? 0}% al hablar o responder, y la restaura sin demora`
                 : "Música continúa a volumen normal sin atenuación durante el reconocimiento de voz"
             }
             badge={
@@ -2160,7 +2160,11 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                   ? 'bg-red-500/20 text-red-300 border-red-500/30'
                   : 'bg-white/10 text-gray-400 border-white/10'
               }`}>
-                {speechConfig.duckingEnabled ? 'ACTIVO (SILENCIO 0%)' : 'DESACTIVADO'}
+                {speechConfig.duckingEnabled
+                  ? ((speechConfig.duckingVolume ?? 0) === 0
+                      ? 'ACTIVO (SILENCIO 0%)'
+                      : `ACTIVO (${speechConfig.duckingVolume ?? 0}%)`)
+                  : 'DESACTIVADO'}
               </span>
             }
             isExpanded={!!expandedSections['audio_ducking']}
@@ -2174,7 +2178,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                 <div>
                   <div className="text-sm font-semibold text-white">Atenuación Inteligente (Audio Ducking)</div>
                   <div className="text-xs text-gray-400">
-                    Baja automáticamente el volumen de la música al 20% al hablar o responder, y lo restaura sin demora.
+                    Baja automáticamente la música al {speechConfig.duckingVolume ?? 0}% al hablar o responder, y la restaura sin demora.
                   </div>
                 </div>
               </div>
@@ -2191,6 +2195,34 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                   }`}
                 />
               </button>
+            </div>
+
+            {/* Volumen del ducking: 0-100 en pasos de 10 (0% = silencio total) */}
+            <div className={`mt-4 space-y-1 ${speechConfig.duckingEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
+              <div className="flex items-center justify-between text-[11px] text-gray-300">
+                <span>Volumen de la música durante la atenuación</span>
+                <span className="font-mono text-red-400 font-bold">
+                  {(speechConfig.duckingVolume ?? 0) === 0 ? '0% (SILENCIO)' : `${speechConfig.duckingVolume ?? 0}%`}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="10"
+                value={speechConfig.duckingVolume ?? 0}
+                onChange={(e) => onUpdateSpeechConfig({ duckingVolume: parseInt(e.target.value, 10) })}
+                className="w-full accent-red-500 cursor-pointer"
+              />
+              <div className="flex justify-between text-[9px] text-gray-400 px-0.5 font-mono">
+                <span>0% Silencio</span>
+                <span>50%</span>
+                <span>100% Sin atenuar</span>
+              </div>
+              <div className="text-[10px] text-gray-400">
+                La música baja a este porcentaje de su volumen mientras hablas o el asistente responde.
+                Con 0% queda en silencio total (recomendado: evita que el micrófono confunda la música con comandos).
+              </div>
             </div>
           </CollapsibleSection>
 

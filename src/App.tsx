@@ -450,6 +450,7 @@ export default function App() {
       speechPitch: 1.0,
       speechVolume: 1.0,
       duckingEnabled: true,
+      duckingVolume: 0,
       continuousListening: false,
       useEdgeReadAloudVoice: true,
       ttsEngine: 'neural',
@@ -468,6 +469,11 @@ export default function App() {
         if (cfg.audioInputDeviceId === 'all' || cfg.audioInputDeviceId === 'todos') {
           cfg.audioInputDeviceId = 'default';
         }
+        // Volumen del ducking: se guarda en pasos de 10 (0-100). 0 = silencio total.
+        const duckingVolume = Number(cfg.duckingVolume);
+        cfg.duckingVolume = isNaN(duckingVolume)
+          ? 0
+          : Math.min(100, Math.max(0, Math.round(duckingVolume / 10) * 10));
         return cfg;
       }
     } catch (e) {}

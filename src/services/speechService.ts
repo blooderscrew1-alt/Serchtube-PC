@@ -28,6 +28,11 @@ export interface SpeechConfig {
   speechPitch: number;
   speechVolume?: number;
   duckingEnabled: boolean;
+  /**
+   * Volumen de la musica durante la atenuacion, en % (0-100, pasos de 10).
+   * 0 = silencio total (predeterminado); 100 = sin atenuacion.
+   */
+  duckingVolume?: number;
   continuousListening: boolean;
   wakeWordEnabled?: boolean;
   wakeWord?: string;
@@ -253,6 +258,7 @@ export class SpeechService {
     speechPitch: 1.0,
     speechVolume: 1.0,
     duckingEnabled: true,
+    duckingVolume: 0,
     continuousListening: true,
     useEdgeReadAloudVoice: true,
     ttsEngine: 'neural',
@@ -617,6 +623,7 @@ export class SpeechService {
   public updateConfig(newConfig: Partial<SpeechConfig>) {
     this.config = { ...this.config, ...newConfig };
     AudioEngine.getInstance().setDuckingEnabled(this.config.duckingEnabled);
+    AudioEngine.getInstance().setDuckingVolume(this.config.duckingVolume ?? 0);
 
     if (newConfig.satelliteMicOnly !== undefined) {
       if (newConfig.satelliteMicOnly) {

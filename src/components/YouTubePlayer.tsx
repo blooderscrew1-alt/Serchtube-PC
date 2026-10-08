@@ -3,6 +3,7 @@ import { Track, PlayerState, SystemStatus, VideoQuality, AutoVolumeReducerConfig
 import { getQualityOption } from '../utils/quality';
 import { Sparkles, Gauge, VolumeX, ArrowDown } from 'lucide-react';
 import { youtubeAuthService } from '../services/youtubeAuthService';
+import { AudioEngine } from '../services/audioEngine';
 
 interface YouTubePlayerProps {
   track: Track | null;
@@ -545,7 +546,10 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       } else {
         playerRef.current.unMute();
         const rawVolume100 = Math.min(100, Math.max(0, Math.round((playerState.volume / 15) * 100)));
-        const effectiveVolume = isDucked ? Math.round(rawVolume100 * 0.2) : rawVolume100;
+        // El volumen de la atenuacion es configurable (Ajustes > Atenuacion Inteligente):
+        // 0% = silencio total mientras habla el asistente, 100% = sin atenuacion.
+        const duckingVolume = AudioEngine.getInstance().getDuckingVolume();
+        const effectiveVolume = isDucked ? Math.round(rawVolume100 * (duckingVolume / 100)) : rawVolume100;
         playerRef.current.setVolume(effectiveVolume);
       }
     } catch (e) {}
