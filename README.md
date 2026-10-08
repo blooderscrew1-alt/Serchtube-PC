@@ -49,17 +49,21 @@ claves guardadas en `localStorage` son de cada equipo).
 ## PC host sin GitHub: un solo ejecutable (.exe)
 
 Para una PC que **no tiene Git, ni npm, ni cuentas** hay un ejecutable único que hace
-todo. Hay **dos variantes** según lo que tenga esa PC:
+todo. Los ejecutables se publican en **GitHub Releases** (no dentro del repositorio,
+para que este no crezca con binarios). Hay **dos variantes**:
 
-| Variante | Tamaño | Necesita en la host | Dónde está |
-|---|---|---|---|
-| `SerchTube.exe` | **1,5 MB** | Windows + **Node.js** en el PATH | **incluido en el repositorio** (se puede bajar de GitHub) |
-| `SerchTube-con-Node.exe` | **34 MB** | solo **Windows** (Node va adentro) | se genera localmente (no se sube por tamaño) |
+| Variante | Tamaño | Necesita en la host |
+|---|---|---|
+| `SerchTube.exe` | **1,5 MB** | Windows + **Node.js** en el PATH |
+| `SerchTube-con-Node.exe` | **34 MB** | solo **Windows** (Node va adentro) |
 
-Se puede **descargar el chico directamente desde GitHub** (el repositorio es público,
-no hace falta cuenta ni Git), por ejemplo con el navegador de la PC host:
+**Descarga directa** (el repositorio es público: no hace falta cuenta ni Git), con el
+navegador de la PC host:
 
-    https://github.com/blooderscrew1-alt/SerchTube-PC/raw/main/build/portable/SerchTube.exe
+    https://github.com/blooderscrew1-alt/SerchTube-PC/releases/latest/download/SerchTube.exe
+    https://github.com/blooderscrew1-alt/SerchTube-PC/releases/latest/download/SerchTube-con-Node.exe
+
+Esas URLs son **fijas**: siempre apuntan a la última Release publicada.
 
 Qué hace al ejecutarlo:
 
@@ -74,12 +78,15 @@ Qué hace al ejecutarlo:
 - La variante con Node usa **su propio `node.exe`**: sirve incluso en PCs donde Node
   no está instalado (el lanzador lo detecta y lo usa automáticamente).
 
-Generarlos (en la PC de desarrollo, después de cada cambio):
+Generarlos y publicarlos (en la PC de desarrollo, después de cada cambio):
 
-- doble clic en `Generar ejecutable portable.bat` → genera el chico
-- doble clic en `Generar ejecutable portable.bat -ConNode` → genera el que incluye Node
-  (la primera vez descarga Node LTS ~30 MB y lo deja cacheado en `build\cache\`)
-- o `npm run portable` (agregando `-- -ConNode` para la variante grande)
+- doble clic en `Publicar ejecutables.bat` → compila los dos `.exe` y los sube a una
+  Release nueva (etiqueta `portable-<commit>`). Ese es el camino normal.
+- Solo generar, sin publicar:
+  - `Generar ejecutable portable.bat` → el chico
+  - `Generar ejecutable portable.bat -ConNode` → el que incluye Node (la primera vez
+    descarga Node LTS ~30 MB y lo deja cacheado en `build\cache\`)
+  - o `npm run portable` (con `-- -ConNode` para la variante grande)
 
 Detalles útiles:
 
@@ -88,9 +95,8 @@ Detalles útiles:
 - Si algo falla en la host, el instalador deja la traza en
   `%TEMP%\serchtube-install.log`.
 - En la host **no** hace falta Python ni Git.
-- El `.exe` chico se sube al repositorio en cada actualización (para que la URL de
-  descarga siempre tenga la última versión); la variante con Node no se sube por
-  tamaño, así que si la necesitas hay que copiarla o generarla.
+- La publicación usa la credencial que Git ya tiene guardada para github.com; si no
+  existe, se puede pasar un token con `-Token ghp_xxx` (permiso `repo`).
 
 ## Actualizar a la última versión (un clic)
 

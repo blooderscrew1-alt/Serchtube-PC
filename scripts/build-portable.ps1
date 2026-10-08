@@ -261,7 +261,24 @@ if (-not $generado) {
 
 New-Item -ItemType Directory -Force -Path $Salida | Out-Null
 $destino = Join-Path $Salida $nombreExe
-Copy-Item -LiteralPath $destinoTemp -Destination $destino -Force
+# El .exe anterior puede estar en uso (antivirus, una prueba corriendo): se reintenta
+$copiado = $false
+for ($intento = 1; $intento -le 5 -and -not $copiado; $intento++) {
+  try {
+    Copy-Item -LiteralPath $destinoTemp -Destination $destino -Force -ErrorAction Stop
+    $copiado = $true
+  } catch {
+    if ($intento -eq 1) {
+      Aviso "No pude escribir $nombreExe (puede estar en uso). Reintentando..."
+    }
+    Start-Sleep -Seconds 3
+  }
+}
+if (-not $copiado) {
+  Write-Host "[Portable] No pude copiar el .exe a $destino (esta en uso)." -ForegroundColor Red
+  Write-Host "[Portable] El paquete generado quedo en: $destinoTemp" -ForegroundColor Yellow
+  exit 1
+}
 Remove-Item -Recurse -Force $salidaTemp -ErrorAction SilentlyContinue
 
 $mb = (Get-Item $destino).Length / 1MB

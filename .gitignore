@@ -1,10 +1,7 @@
-node_modules/
-# build/ se ignora, EXCEPTO el ejecutable portable chico (para poder bajarlo de GitHub).
-# OJO: hay que re-incluir la carpeta y despues ignorar su contenido, menos el .exe chico.
-build/*
-!build/portable/
-build/portable/*
-!build/portable/SerchTube.exe
+﻿node_modules/
+# build/ se ignora por completo: los ejecutables se publican en GitHub Releases
+# (scripts\publicar-release.ps1), asi el repositorio no crece con binarios.
+build/
 dist/
 dev-dist/
 coverage/
