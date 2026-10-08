@@ -57,7 +57,7 @@ if (-not $SinBuild) {
   Aviso "Se usa el dist existente (-SinBuild)."
 }
 if (-not (Test-Path -LiteralPath (Join-Path $Raiz 'dist\index.html'))) {
-  Write-Host "[Portable] No hay dist\index.html: corre 'npm run build'." -ForegroundColor Red; exit 1
+  Write-Host "[Portable] No hay dist\index.html: ejecuta 'npm run build'." -ForegroundColor Red; exit 1
 }
 
 # ---------------------------- 2) Servidor con TODAS las dependencias adentro
@@ -254,7 +254,7 @@ for ($intento = 1; $intento -le 3 -and -not $generado; $intento++) {
 if (-not $generado) {
   Write-Host "[Portable] IExpress no genero el archivo." -ForegroundColor Red
   Write-Host "[Portable] El paquete sin comprimir quedo en: $payloadDir" -ForegroundColor Yellow
-  Write-Host "[Portable] Podes generarlo a mano con:" -ForegroundColor Yellow
+  Write-Host "[Portable] Puedes generarlo a mano con:" -ForegroundColor Yellow
   Write-Host "           iexpress /N /Q `"$sed`"" -ForegroundColor Yellow
   exit 1
 }
@@ -271,7 +271,7 @@ Write-Host (" Ejecutable: {0}" -f $destino)
 Write-Host (" Tamano    : {0:N2} MB" -f $mb)
 Write-Host " Version   : $version"
 Write-Host ""
-Write-Host " Copialo a la PC host y hacele doble clic:"
+Write-Host " Cópialo a la PC host y hacele doble clic:"
 Write-Host "   - la primera vez  -> instala y abre SerchTube"
 Write-Host "   - las siguientes  -> actualiza (conserva claves y registros)"
 if ($ConNode) {

@@ -26,20 +26,20 @@ fijos, y los scripts de arranque/actualización hablan solo con GitHub (no con l
 donde se desarrolló).
 
 Requisitos de esa PC: **Node.js** (obligatorio) e **Internet**. Git es **opcional**
-(sin Git, el actualizador baja el ZIP de la rama; con Git la actualización es más
+(sin Git, el actualizador descarga el ZIP de la rama; con Git la actualización es más
 rápida y en un solo paso).
 
-1. Traé el proyecto una vez:
+1. Trae el proyecto una vez:
    - con Git: `git clone https://github.com/blooderscrew1-alt/SerchTube-PC.git serchtube`
-   - o descargá el ZIP de la rama y descomprimilo.
-2. (Opcional) copiá tu `.env` si querés las mismas claves; si no, la app restaura las
+   - o descarga el ZIP de la rama y descomprímelo.
+2. (Opcional) copia tu `.env` si quieres las mismas claves; si no, la app restaura las
    claves guardadas en el navegador de ese equipo.
 3. Doble clic en **`Instalar en esta PC.bat`** (`scripts/install-serchtube.ps1`):
    comprueba Node.js/Git, crea el `.env` si falta, instala dependencias, registra el
    arranque automático y abre SerchTube.
 
 Después, en esa PC, para actualizar: **`Actualizar SerchTube.bat`**.
-Si falta Node.js o Git, el script lo avisa y podés dejarlo instalar con
+Si falta Node.js o Git, el script lo avisa y puedes dejarlo instalar con
 `-InstalarRequisitos` (usa winget).
 
 Lo que **no** viaja entre PCs (es lo esperable): `node_modules/`, tus claves
@@ -90,7 +90,7 @@ Detalles útiles:
 - En la host **no** hace falta Python ni Git.
 - El `.exe` chico se sube al repositorio en cada actualización (para que la URL de
   descarga siempre tenga la última versión); la variante con Node no se sube por
-  tamaño, así que si la necesitás hay que copiarla o generarla.
+  tamaño, así que si la necesitas hay que copiarla o generarla.
 
 ## Actualizar a la última versión (un clic)
 
@@ -115,12 +115,12 @@ No toca tus claves (`.env`), tus registros (`logs/`) ni `node_modules/`.
 Opciones: `-SinReiniciar`, `-Reiniciar` (forzar reinicio aunque no haya cambios),
 `-Forzar` (descarta cambios locales), `-SinDependencias`, `-Rama <rama>`.
 
-- Si tenés cambios locales sin guardar, los guarda en `git stash` y te indica cómo
+- Si tienes cambios locales sin guardar, los guarda en `git stash` y te indica cómo
   recuperarlos (`git stash pop`).
 - Si la carpeta **no** es un repositorio git (la bajaste como ZIP), **no hace falta
   Git**: el script descarga el ZIP de la rama y copia encima conservando
   `node_modules`, `.env` y `logs`. Para pasar al modo git (más rápido y permite
-  `-Forzar`), cloná una vez y copiá tu `.env`:
+  `-Forzar`), clona una vez y copia tu `.env`:
   `git clone https://github.com/blooderscrew1-alt/Serchtube-PC.git serchtube`
 
 ## Arranque en una sola ventana (Windows)

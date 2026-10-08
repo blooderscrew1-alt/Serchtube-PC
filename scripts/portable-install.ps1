@@ -100,7 +100,7 @@ if ($traeNode) {
   $node = Get-Command node -ErrorAction SilentlyContinue
   if (-not $node) {
     Write-Mal "No encuentro Node.js en esta PC."
-    Write-Mal "Pedi el paquete que incluye Node, o instala Node desde https://nodejs.org (LTS)."
+    Write-Mal "Pide el paquete que incluye Node, o instala Node desde https://nodejs.org (LTS)."
     if (-not $SinPausa) { Read-Host "`nPulsa ENTER para cerrar" }
     exit 1
   }
@@ -158,7 +158,7 @@ try {
 if (-not (Test-Path -LiteralPath (Join-Path $Carpeta '.env')) -and
     (Test-Path -LiteralPath (Join-Path $Carpeta '.env.example'))) {
   Copy-Item -LiteralPath (Join-Path $Carpeta '.env.example') -Destination (Join-Path $Carpeta '.env') -Force
-  Write-Paso "Creado .env (podes pegar tus claves; la app tambien las restaura desde el navegador)."
+  Write-Paso "Creado .env (puedes pegar tus claves; la app tambien las restaura desde el navegador)."
 }
 
 $version = 'sin-version'

@@ -7,7 +7,7 @@ rem  autoinicio de Windows: desde el proximo encendido arranca solo (servidor
 rem  incluido) sin abrir consolas.
 rem
 rem  Abre en TU perfil de navegador de siempre: extensiones, ajustes y claves
-rem  guardadas tal como los tenias, y el microfono sin preguntar.
+rem  guardadas tal como los tenías, y el microfono sin preguntar.
 rem
 rem  Opciones: -Modo pestana | -SinNavegador | -SinAutoInicio | -QuitarAutoInicio
 rem            -PedirPermisoMicro | -Navegador chrome | -Perfil dedicado

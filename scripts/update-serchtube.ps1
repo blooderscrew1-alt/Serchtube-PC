@@ -12,7 +12,7 @@
     5. Muestra un resumen: de que version a que version y que hizo.
 
   Si la carpeta NO es un repositorio git (la bajaste como ZIP), no hace falta Git:
-  el script baja el ZIP del repositorio y copia encima, conservando node_modules,
+  el script descarga el ZIP del repositorio y copia encima, conservando node_modules,
   .env y logs.
 
   Uso:
@@ -36,7 +36,7 @@ param(
   # Descarta los cambios locales de esta carpeta en vez de abortar
   [switch]$Forzar,
 
-  # No tocar el servidor (util si lo manejas vos)
+  # No tocar el servidor (util si lo manejas tú)
   [switch]$SinReiniciar,
 
   # Reiniciar el servidor aunque no haya cambios (para aplicar cambios a mano)
@@ -150,12 +150,12 @@ function Comprobar-Requisitos {
     if (-not (Test-Comando 'node') -or -not (Test-Comando 'npm')) { $siguen += 'Node.js' }
     if (-not (Test-Comando 'git')) { $siguen += 'Git' }
     if ($siguen.Count -gt 0) {
-      Write-Aviso "Todavia faltan: $($siguen -join ', '). Cierra esta ventana, volve a abrirla y ejecuta de nuevo."
+      Write-Aviso "Todavia faltan: $($siguen -join ', '). Cierra esta ventana, vuelve a abrirla y ejecuta de nuevo."
     } else {
       Write-Paso "Requisitos instalados."
     }
   } elseif (Test-Comando 'winget') {
-    Write-Paso "Puedo instalarlos yo: volve a ejecutar con -InstalarRequisitos"
+    Write-Paso "Puedo instalarlos yo: vuelve a ejecutar con -InstalarRequisitos"
   }
 }
 
@@ -197,7 +197,7 @@ if ($esRepo -and (Test-Comando 'git')) {
       Write-Aviso "Hay $($sucio.Count) archivo(s) con cambios locales: se guardan temporalmente (git stash)."
       git -C $Raiz stash push -u -m "antes de actualizar $(Get-Date -Format 'yyyy-MM-dd HH:mm')" | Out-Null
       if ($LASTEXITCODE -ne 0) {
-        Write-Mal "No pude guardar los cambios locales. Guardalos vos o ejecuta con -Forzar."
+        Write-Mal "No pude guardar los cambios locales. Guardalos tú o ejecuta con -Forzar."
         exit 1
       }
       $stasheado = $true
@@ -221,7 +221,7 @@ if ($esRepo -and (Test-Comando 'git')) {
     git -C $Raiz pull --ff-only origin $Rama --quiet
     if ($LASTEXITCODE -ne 0) {
       Write-Mal "No se pudo actualizar con 'git pull' (cambios locales o historiales distintos)."
-      Write-Mal "Solucion rapida: volve a ejecutar con -Forzar (descarta cambios locales de ESTA carpeta)."
+      Write-Mal "Solucion rapida: vuelve a ejecutar con -Forzar (descarta cambios locales de ESTA carpeta)."
       exit 1
     }
   }

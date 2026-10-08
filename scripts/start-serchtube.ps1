@@ -43,7 +43,7 @@ param(
   [int]$Puerto = 3000,
 
   # 'normal' (recomendado) = usa TU perfil de siempre: extensiones, ajustes y claves
-  #                          guardadas (localStorage) tal como los tenias.
+  #                          guardadas (localStorage) tal como los tenías.
   # 'dedicado'             = perfil aparte (kiosco): sin extensiones ni datos previos.
   [ValidateSet('normal', 'dedicado')]
   [string]$Perfil = 'normal',

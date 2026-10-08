@@ -3,7 +3,7 @@ setlocal
 rem ============================================================================
 rem  SerchTube Music - ACTUALIZAR (un solo clic)
 rem
-rem  Baja solo lo que cambio desde GitHub, ejecuta "npm install" unicamente si
+rem  Descarga solo lo que cambio desde GitHub, ejecuta "npm install" unicamente si
 rem  cambiaron las dependencias y reinicia el servidor. No toca tus claves
 rem  (.env), tus registros (logs) ni node_modules.
 rem

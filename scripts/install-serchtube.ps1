@@ -7,7 +7,7 @@
     2. Verifica Node.js (obligatorio) y Git (opcional) e intenta instalarlos con
        winget si falta algo y lo pedis con -InstalarRequisitos.
     3. Crea el archivo .env a partir de .env.example si no existe (para pegar las
-       claves; tambien se restauran solas desde el navegador si ya las tenias).
+       claves; tambien se restauran solas desde el navegador si ya las tenías).
     4. Instala las dependencias (npm install).
     5. Registra el arranque automatico y abre SerchTube.
 
@@ -80,9 +80,9 @@ if ($faltan.Count -gt 0) {
   foreach ($f in $faltan) { Write-Aviso "Falta $($f.Nombre)  ->  $($f.Url)" }
   if ($InstalarRequisitos) {
     foreach ($f in $faltan) { Instalar-ConWinget $f.Id $f.Nombre | Out-Null }
-    if (-not (Test-Comando 'node')) { Write-Aviso "Node.js todavia no esta disponible: cerra esta ventana, abrila de nuevo y ejecuta otra vez." }
+    if (-not (Test-Comando 'node')) { Write-Aviso "Node.js todavia no esta disponible: cierra esta ventana, ábrela de nuevo y ejecuta otra vez." }
   } elseif (Test-Comando 'winget') {
-    Write-Paso "Puedo instalarlos yo: volve a ejecutar con -InstalarRequisitos"
+    Write-Paso "Puedo instalarlos yo: vuelve a ejecutar con -InstalarRequisitos"
   }
   if (-not (Test-Comando 'node') -or -not (Test-Comando 'npm')) {
     Write-Mal "Sin Node.js no se pueden instalar las dependencias ni arrancar la app."
@@ -97,7 +97,7 @@ $envFile = Join-Path $Raiz '.env'
 $envEjemplo = Join-Path $Raiz '.env.example'
 if (-not (Test-Path -LiteralPath $envFile) -and (Test-Path -LiteralPath $envEjemplo)) {
   Copy-Item -LiteralPath $envEjemplo -Destination $envFile -Force
-  Write-Paso "Creado .env a partir de .env.example: pega ahi tus claves (o dejalo asi)."
+  Write-Paso "Creado .env a partir de .env.example: pega ahi tus claves (o déjalo asi)."
 } elseif (Test-Path -LiteralPath $envFile) {
   Write-Paso ".env ya existe: no se toca."
 }
