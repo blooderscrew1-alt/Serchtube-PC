@@ -70,15 +70,6 @@ Write-Host "=============================================" -ForegroundColor Gree
 Write-Host ""
 
 # ------------------------------------------------------------- 1) Requisitos
-$node = Get-Command node -ErrorAction SilentlyContinue
-if (-not $node) {
-  Write-Mal "No encuentro Node.js en esta PC."
-  Write-Mal "Instalalo desde https://nodejs.org (version LTS) y volve a ejecutar este archivo."
-  if (-not $SinPausa) { Read-Host "`nPulsa ENTER para cerrar" }
-  exit 1
-}
-Write-Paso "Node.js: $(node --version)  ($($node.Source))"
-
 $zip = Join-Path $Origen $Zip
 if (-not (Test-Path -LiteralPath $zip)) {
   Write-Mal "No encuentro el paquete de la aplicacion ($Zip) en $Origen."
@@ -89,6 +80,32 @@ if (-not (Test-Path -LiteralPath $zip)) {
   exit 1
 }
 Registrar "Paquete encontrado: $zip ($([math]::Round((Get-Item $zip).Length/1MB,2)) MB)"
+
+# ¿El paquete trae su propio Node? (variante "con Node": no requiere nada instalado)
+$traeNode = Test-Path -LiteralPath (Join-Path $Origen 'node-incluido.txt')
+if (-not $traeNode) {
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    $z = [System.IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+      $traeNode = [bool](@($z.Entries | Where-Object { $_.FullName -eq 'node.exe' }).Count)
+    } finally { $z.Dispose() }
+  } catch { $traeNode = $false }
+}
+Registrar "Node incluido en el paquete: $traeNode"
+
+if ($traeNode) {
+  Write-Paso "Este paquete incluye Node.js: no hace falta tenerlo instalado."
+} else {
+  $node = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $node) {
+    Write-Mal "No encuentro Node.js en esta PC."
+    Write-Mal "Pedi el paquete que incluye Node, o instala Node desde https://nodejs.org (LTS)."
+    if (-not $SinPausa) { Read-Host "`nPulsa ENTER para cerrar" }
+    exit 1
+  }
+  Write-Paso "Node.js: $(node --version)  ($($node.Source))"
+}
 
 Write-Paso "Instalando en: $Carpeta"
 

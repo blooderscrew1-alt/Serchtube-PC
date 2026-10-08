@@ -48,24 +48,38 @@ claves guardadas en `localStorage` son de cada equipo).
 
 ## PC host sin GitHub: un solo ejecutable (.exe)
 
-Para una PC que **solo tiene Windows + Node.js** (sin Git, sin npm, sin cuentas) hay
-un ejecutable único que hace todo:
+Para una PC que **no tiene Git, ni npm, ni cuentas** hay un ejecutable único que hace
+todo. Hay **dos variantes** según lo que tenga esa PC:
 
-    build\portable\SerchTube.exe        (~1,5 MB, se genera en la PC de desarrollo)
+| Variante | Tamaño | Necesita en la host | Dónde está |
+|---|---|---|---|
+| `SerchTube.exe` | **1,5 MB** | Windows + **Node.js** en el PATH | **incluido en el repositorio** (se puede bajar de GitHub) |
+| `SerchTube-con-Node.exe` | **34 MB** | solo **Windows** (Node va adentro) | se genera localmente (no se sube por tamaño) |
 
-- **Primera vez en esa PC**: doble clic → instala en `%LOCALAPPDATA%\SerchTube`,
-  crea el acceso directo *SerchTube Music* en el Escritorio, registra el arranque
-  automático y abre la app.
+Se puede **descargar el chico directamente desde GitHub** (el repositorio es público,
+no hace falta cuenta ni Git), por ejemplo con el navegador de la PC host:
+
+    https://github.com/blooderscrew1-alt/SerchTube-PC/raw/main/build/portable/SerchTube.exe
+
+Qué hace al ejecutarlo:
+
+- **Primera vez en esa PC**: instala en `%LOCALAPPDATA%\SerchTube`, crea el acceso
+  directo *SerchTube Music* en el Escritorio, registra el arranque automático y abre
+  la app.
 - **Las siguientes veces**: doble clic en el nuevo `.exe` → **actualiza** la
   instalación conservando tus claves (`.env`) y tus registros (`logs/`).
 - **No necesita internet ni `node_modules`**: el servidor va empaquetado con todas
   sus dependencias dentro (un único `server.cjs` de ~3 MB) y el frontend ya compilado.
 - Es **un solo archivo**: no hay que copiar carpetas ni ejecutar comandos.
+- La variante con Node usa **su propio `node.exe`**: sirve incluso en PCs donde Node
+  no está instalado (el lanzador lo detecta y lo usa automáticamente).
 
-Generarlo (en la PC de desarrollo, después de cada cambio):
+Generarlos (en la PC de desarrollo, después de cada cambio):
 
-- doble clic en `Generar ejecutable portable.bat`, o
-- `npm run portable`
+- doble clic en `Generar ejecutable portable.bat` → genera el chico
+- doble clic en `Generar ejecutable portable.bat -ConNode` → genera el que incluye Node
+  (la primera vez descarga Node LTS ~30 MB y lo deja cacheado en `build\cache\`)
+- o `npm run portable` (agregando `-- -ConNode` para la variante grande)
 
 Detalles útiles:
 
@@ -73,8 +87,10 @@ Detalles útiles:
   PC"*: hay que pulsar **Más información → Ejecutar de todas formas**.
 - Si algo falla en la host, el instalador deja la traza en
   `%TEMP%\serchtube-install.log`.
-- En la host **no** hace falta Python ni Git; solo Node.js (si falta, el propio
-  instalador lo dice y ofrece el enlace de descarga).
+- En la host **no** hace falta Python ni Git.
+- El `.exe` chico se sube al repositorio en cada actualización (para que la URL de
+  descarga siempre tenga la última versión); la variante con Node no se sube por
+  tamaño, así que si la necesitás hay que copiarla o generarla.
 
 ## Actualizar a la última versión (un clic)
 

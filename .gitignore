@@ -1,5 +1,10 @@
 node_modules/
-build/
+# build/ se ignora, EXCEPTO el ejecutable portable chico (para poder bajarlo de GitHub).
+# OJO: hay que re-incluir la carpeta y despues ignorar su contenido, menos el .exe chico.
+build/*
+!build/portable/
+build/portable/*
+!build/portable/SerchTube.exe
 dist/
 dev-dist/
 coverage/
