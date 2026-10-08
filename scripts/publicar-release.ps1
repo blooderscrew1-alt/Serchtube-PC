@@ -79,6 +79,13 @@ if (Test-Path -LiteralPath $exeChico) { $adjuntos += $exeChico }
 if (-not $SinVarianteNode -and (Test-Path -LiteralPath $exeNode)) { $adjuntos += $exeNode }
 if ($adjuntos.Count -eq 0) { Mal "No hay ningun .exe para publicar en $salida"; exit 1 }
 
+if ($SinVarianteNode) {
+  Aviso "Publicando SIN la variante con Node."
+  Aviso "OJO: la Release mas nueva pasara a ser 'latest' y la URL"
+  Aviso "     releases/latest/download/SerchTube-con-Node.exe dara 404 hasta que"
+  Aviso "     publiques una Release que si la incluya (sin -SinVarianteNode)."
+}
+
 # ---------------------------------------------------------------------- 3) Token
 if (-not $Token) { $Token = $env:GITHUB_TOKEN }
 if (-not $Token) { $Token = $env:GH_TOKEN }
