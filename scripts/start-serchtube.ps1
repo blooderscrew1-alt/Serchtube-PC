@@ -10,16 +10,17 @@
     3. Abre el navegador en modo app con TU PERFIL DE SIEMPRE (por defecto):
          - funcionan tus EXTENSIONES,
          - estan tus AJUSTES y tus CLAVES guardadas (localStorage),
-         - el MICROFONO ya no pregunta: el permiso se concede automaticamente
-           (se puede volver al comportamiento normal con -PedirPermisoMicro).
-       Con -Perfil dedicado usa un perfil aparte (modo kiosco, sin extensiones
-       ni datos previos), con preflight del directorio y autoreparacion.
+         - el MICROFONO usa el permiso que ya tiene guardado tu perfil; si todavia no
+           lo tiene, el navegador pregunta UNA vez y lo recuerda.
+       Con -Perfil dedicado usa un perfil aparte (modo kiosco, sin extensiones ni
+       datos previos): el permiso del microfono se deja escrito en ese perfil, asi
+       no pregunta nunca.
+       NO se usan flags de Chromium para el microfono: "--use-fake-ui-for-media-stream"
+       esta en la lista de flags peligrosos y hace que el navegador muestre el aviso
+       "estas usando una linea de comandos no compatible".
     4. Si la ventana de la app ya esta abierta, la trae al frente y no abre otra.
     5. Verifica que la ventana aparecio; si no, lo registra y reintenta una vez.
     6. Registra el arranque automatico de Windows (una sola vez).
-
-  Pensado para cualquier PC con Windows: no depende de rutas ni de dispositivos
-  concretos. Se puede ajustar todo por parametros.
 
   Pensado para cualquier PC con Windows: no depende de rutas ni de dispositivos
   concretos. Se puede ajustar todo por parametros.
@@ -31,7 +32,7 @@
     powershell ... -File scripts\start-serchtube.ps1 -Navegador chrome
     powershell ... -File scripts\start-serchtube.ps1 -Modo pestana
     powershell ... -File scripts\start-serchtube.ps1 -SinNavegador
-    powershell ... -File scripts\start-serchtube.ps1 -PedirPermisoMicro
+    powershell ... -File scripts\start-serchtube.ps1 -SinPermisoMicro
     powershell ... -File scripts\start-serchtube.ps1 -Perfil dedicado -RepararPerfil
 #>
 [CmdletBinding()]
@@ -61,9 +62,10 @@ param(
   # Cerrar el navegador con nuestro perfil dedicado y apartarlo (se crea uno limpio)
   [switch]$RepararPerfil,
 
-  # Por defecto el micrófono se concede solo (no pregunta en cada arranque).
-  # Con este interruptor se comporta como un navegador normal: pregunta.
-  [switch]$PedirPermisoMicro,
+  # Permite conceder el micrófono sin preguntar, escribiendo el permiso en el perfil
+  # del navegador (no se usan flags de Chromium: eso mostraba el aviso de
+  # "linea de comandos no compatible" en la ventana).
+  [switch]$SinPermisoMicro,
 
   [switch]$SinNavegador,
   [switch]$SinAutoInicio,
@@ -368,6 +370,70 @@ function Quitar-AutoInicio {
   return $quitado
 }
 
+function Test-MicroConcedido([string]$Familia) {
+  # Comprueba (sin abrir el navegador) si ese perfil ya tiene el permiso del
+  # micrófono concedido para la app. Solo informativo.
+  try {
+    $raices = @{
+      'Edge'   = Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'
+      'Chrome' = Join-Path $env:LOCALAPPDATA 'Google\Chrome\User Data'
+      'Brave'  = Join-Path $env:LOCALAPPDATA 'BraveSoftware\Brave-Browser\User Data'
+    }
+    $raiz = $raices[$Familia]
+    if (-not $raiz) { return $false }
+    $prefs = Join-Path (Join-Path $raiz 'Default') 'Preferences'
+    if (-not (Test-Path -LiteralPath $prefs)) { return $false }
+    $texto = Get-Content -LiteralPath $prefs -Raw -Encoding UTF8
+    $rx = [regex]::Escape("http://localhost:$Puerto,*") + '\s*:\s*\{[^}]*"setting"\s*:\s*1'
+    return [bool]($texto -match $rx)
+  } catch {
+    return $false
+  }
+}
+
+function Conceder-MicroEnPerfil {
+  # Deja el permiso del micrófono escrito en el perfil DEDICADO (kiosco), así el
+  # navegador no pregunta y NO hace falta ningún flag de Chromium (los flags de
+  # micrófono disparan el aviso de "linea de comandos no compatible").
+  try {
+    if (-not $PerfilReal) { return }
+    $carpeta = Join-Path $PerfilReal 'Default'
+    $prefs = Join-Path $carpeta 'Preferences'
+    if (Test-Path -LiteralPath $prefs) {
+      $texto = Get-Content -LiteralPath $prefs -Raw -Encoding UTF8
+      if ($texto -match [regex]::Escape("http://localhost:$Puerto")) {
+        Write-Paso "Microfono: el perfil dedicado ya tiene el permiso guardado."
+      } else {
+        Write-Paso "Microfono: el perfil dedicado ya existia; si pregunta, concede una vez y queda guardado."
+      }
+      return
+    }
+    New-Item -ItemType Directory -Force -Path $carpeta | Out-Null
+    $json = @"
+{
+  "profile": {
+    "content_settings": {
+      "exceptions": {
+        "media_stream_mic": {
+          "http://localhost:$Puerto,*": {
+            "setting": 1,
+            "last_modified": "13380000000000000"
+          }
+        }
+      }
+    }
+  }
+}
+"@
+    # Sin BOM (Chromium no espera BOM en Preferences)
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($prefs, $json, $utf8)
+    Write-Paso "Microfono: permiso concedido en el perfil dedicado (no preguntara)."
+  } catch {
+    Write-Aviso "No pude pre-conceder el microfono: $($_.Exception.Message)"
+  }
+}
+
 # ------------------------------------------------- 0) Candado de un solo lanzador
 $Candado = New-Object System.Threading.Mutex($false, 'Local\SerchTubeLanzador')
 $TengoElTurno = $false
@@ -527,9 +593,14 @@ try {
   Write-Paso "Navegador: $($nav.Nombre)  ($($nav.Exe))"
   if ($UsarPerfilDedicado) {
     Write-Paso "Perfil dedicado (sin extensiones ni datos previos): $PerfilReal"
+    if (-not $SinPermisoMicro) { Conceder-MicroEnPerfil }
   } else {
     Write-Paso "Perfil: el tuyo de siempre (extensiones, ajustes y claves guardadas)"
-    if (-not $PedirPermisoMicro) { Write-Paso "Microfono: permiso concedido automaticamente (no preguntara)" }
+    if (Test-MicroConcedido) {
+      Write-Paso "Microfono: ya tiene permiso guardado en tu perfil (no preguntara)."
+    } else {
+      Write-Paso "Microfono: la primera vez el navegador pedira permiso; despues lo recuerda."
+    }
   }
 
   # --------------------------------------------------- 7) Ya hay una ventana abierta
@@ -564,11 +635,13 @@ try {
   }
 
   function New-ArgumentosNavegador {
+    # NO se usan flags de Chromium para el microfono: "--use-fake-ui-for-media-stream"
+    # esta en la lista de flags peligrosos y el navegador muestra el aviso de
+    # "linea de comandos no compatible". El permiso se concede en el perfil.
     $a = @('--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble',
       '--hide-crash-restore-bubble', '--disable-background-mode', '--start-maximized')
     if ($UsarPerfilDedicado) { $a = @("--user-data-dir=`"$PerfilReal`"") + $a }
     if ($Modo -eq 'app') { $a += "--app=$Url" } else { $a += $Url }
-    if (-not $PedirPermisoMicro) { $a += '--use-fake-ui-for-media-stream' }
     return $a
   }
 

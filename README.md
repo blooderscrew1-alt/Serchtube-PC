@@ -147,8 +147,12 @@ El lanzador ([scripts/start-serchtube.ps1](scripts/start-serchtube.ps1)):
 2. Abre el navegador en **modo app con TU PERFIL DE SIEMPRE** (por defecto):
    una sola ventana, sin barra de pestañas, y con **tus extensiones, tus ajustes y
    tus claves guardadas** tal como los tenías.
-3. El **micrófono ya no pregunta**: el permiso se concede automáticamente en cada
-   arranque. Para volver al comportamiento normal del navegador: `-PedirPermisoMicro`.
+3. El **micrófono usa el permiso que tu perfil ya tiene guardado**. Si todavía no lo
+   tiene, el navegador pregunta **una sola vez** y lo recuerda para siempre.
+   No se usan *flags* de Chromium: `--use-fake-ui-for-media-stream` está en la lista
+   de flags peligrosos y hacía que el navegador mostrara el aviso *"estás usando una
+   línea de comandos no compatible"*. En modo `-Perfil dedicado` el permiso se deja
+   escrito en ese perfil, así no pregunta nunca (sin flags).
 4. Si la ventana de la app ya está abierta, la trae al frente y **no abre otra**,
    así que puedes ejecutarlo cuantas veces quieras (arranque de Windows, doble
    clic, script propio).
@@ -180,7 +184,8 @@ Opciones:
 - `-Modo pestana` → una pestaña normal en lugar de la ventana en modo app.
 - `-Navegador edge|chrome|brave|predeterminado` → fuerza el navegador (por defecto
   usa el que exista: Edge, Chrome o Brave).
-- `-PedirPermisoMicro` → que el navegador pregunte el micrófono como siempre.
+- `-SinPermisoMicro` → no escribir el permiso del micrófono en el perfil dedicado
+  (en ese caso el navegador preguntará una vez).
 - `-Perfil dedicado` → perfil aparte, aislado, sin extensiones ni datos previos
   (modo kiosco). Con `-RepararPerfil` (o `Reparar perfil de Edge.bat`) se aparta el
   perfil dedicado y se crea uno limpio.
