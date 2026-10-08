@@ -433,7 +433,12 @@ try {
     # Se prueban en orden: build de produccion (no necesita herramientas de dev)
     # y, si no existe, el servidor de desarrollo del proyecto.
     $arranques = @()
-    if (Test-Path -LiteralPath (Join-Path $Raiz 'dist\server.cjs')) { $arranques += 'node dist\server.cjs' }
+    if (Test-Path -LiteralPath (Join-Path $Raiz 'dist\server.cjs')) {
+      # NODE_ENV=production: sirve el frontend ya compilado (no usa vite).
+      # OJO: las comillas de "NODE_ENV=production" son necesarias: sin ellas cmd
+      # agrega un espacio al valor y el servidor entra en modo desarrollo.
+      $arranques += 'set "NODE_ENV=production" && node dist\server.cjs'
+    }
     $arranques += 'npm run dev'
 
     $topePorIntento = [Math]::Max(20, [int]($EsperaServidor / $arranques.Count))

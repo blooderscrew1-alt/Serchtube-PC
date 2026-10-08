@@ -46,6 +46,36 @@ Lo que **no** viaja entre PCs (es lo esperable): `node_modules/`, tus claves
 (`.env`), los registros (`logs/`) y el perfil del navegador (extensiones, ajustes y
 claves guardadas en `localStorage` son de cada equipo).
 
+## PC host sin GitHub: un solo ejecutable (.exe)
+
+Para una PC que **solo tiene Windows + Node.js** (sin Git, sin npm, sin cuentas) hay
+un ejecutable único que hace todo:
+
+    build\portable\SerchTube.exe        (~1,5 MB, se genera en la PC de desarrollo)
+
+- **Primera vez en esa PC**: doble clic → instala en `%LOCALAPPDATA%\SerchTube`,
+  crea el acceso directo *SerchTube Music* en el Escritorio, registra el arranque
+  automático y abre la app.
+- **Las siguientes veces**: doble clic en el nuevo `.exe` → **actualiza** la
+  instalación conservando tus claves (`.env`) y tus registros (`logs/`).
+- **No necesita internet ni `node_modules`**: el servidor va empaquetado con todas
+  sus dependencias dentro (un único `server.cjs` de ~3 MB) y el frontend ya compilado.
+- Es **un solo archivo**: no hay que copiar carpetas ni ejecutar comandos.
+
+Generarlo (en la PC de desarrollo, después de cada cambio):
+
+- doble clic en `Generar ejecutable portable.bat`, o
+- `npm run portable`
+
+Detalles útiles:
+
+- Al ser un `.exe` sin firma digital, Windows puede mostrar *"Windows protegió tu
+  PC"*: hay que pulsar **Más información → Ejecutar de todas formas**.
+- Si algo falla en la host, el instalador deja la traza en
+  `%TEMP%\serchtube-install.log`.
+- En la host **no** hace falta Python ni Git; solo Node.js (si falta, el propio
+  instalador lo dice y ofrece el enlace de descarga).
+
 ## Actualizar a la última versión (un clic)
 
 No hace falta volver a descargar el proyecto ni reinstalar nada: esta carpeta ya

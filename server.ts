@@ -2670,8 +2670,11 @@ async function startServer() {
     }
   });
 
-  // Vite middleware in development mode, static in production mode
-  if (process.env.NODE_ENV !== "production") {
+  // Vite middleware in development mode, static in production mode.
+  // Se usa .trim() porque al definir la variable desde cmd
+  // ("set NODE_ENV=production && node ...") el valor puede quedar con un espacio.
+  const modoProduccion = (process.env.NODE_ENV || "").trim() === "production";
+  if (!modoProduccion) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
