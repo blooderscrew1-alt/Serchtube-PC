@@ -252,17 +252,19 @@ else {
     $carpeta = Get-ChildItem -Path $temp -Directory | Where-Object { $_.Name -like "$($partes[1])-*" } | Select-Object -First 1
     if (-not $carpeta) { Write-Mal "El ZIP no tiene la estructura esperada."; exit 1 }
     $antes = (Get-HashArchivo (Join-Path $Raiz 'server.ts')).Substring(0, 8)
-    $excluir = @('node_modules', 'logs', 'dist', '.git', '.env')
     Write-Paso "Copiando archivos nuevos (sin tocar node_modules, logs ni .env)..."
-    Get-ChildItem -LiteralPath $carpeta.FullName -Force | ForEach-Object {
-      if ($excluir -contains $_.Name -or $_.Name -like '.env*') { return }
-      $destino = Join-Path $Raiz $_.Name
-      if ($_.PSIsContainer) {
-        Copy-Item -LiteralPath $_.FullName -Destination $destino -Recurse -Force
-      } else {
-        Copy-Item -LiteralPath $_.FullName -Destination $destino -Force
-      }
+    # Se usa robocopy porque mezcla carpetas correctamente. Con Copy-Item, si la
+    # carpeta destino ya existe, el contenido terminaria anidado (scripts\scripts).
+    $rc = Start-Process -FilePath 'robocopy.exe' -Wait -PassThru -WindowStyle Hidden -ArgumentList @(
+      "`"$($carpeta.FullName)`"", "`"$Raiz`"",
+      '/E', '/XD', 'node_modules', 'logs', 'dist', '.git', '/XF', '.env*',
+      '/NFL', '/NDL', '/NJH', '/NJS', '/NP', '/R:1', '/W:1'
+    )
+    if ($rc.ExitCode -ge 8) {
+      Write-Mal "La copia de archivos fallo (robocopy codigo $($rc.ExitCode))."
+      exit 1
     }
+    Write-Registro "robocopy codigo $($rc.ExitCode)"
     $despues = (Get-HashArchivo (Join-Path $Raiz 'server.ts')).Substring(0, 8)
     $antesTitulo = "hash $antes"
     $despuesTitulo = "hash $despues"
