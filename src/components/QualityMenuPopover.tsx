@@ -4,7 +4,10 @@ import { VIDEO_QUALITY_OPTIONS, PLAYBACK_SPEED_OPTIONS, getQualityOption } from 
 import { Check, Sparkles, Gauge, Wifi, Zap, X } from 'lucide-react';
 
 interface QualityMenuPopoverProps {
+  /** Calidad ELEGIDA por el usuario (la que se guarda y se aplica) */
   currentQuality: VideoQuality;
+  /** Calidad REAL que informa YouTube ahora mismo (puede ser menor) */
+  actualQuality?: string;
   availableQualities?: VideoQuality[];
   currentSpeed?: number;
   onSelectQuality: (quality: VideoQuality) => void;
@@ -14,6 +17,7 @@ interface QualityMenuPopoverProps {
 
 export const QualityMenuPopover: React.FC<QualityMenuPopoverProps> = ({
   currentQuality,
+  actualQuality,
   availableQualities = [],
   currentSpeed = 1.0,
   onSelectQuality,
@@ -21,6 +25,8 @@ export const QualityMenuPopover: React.FC<QualityMenuPopoverProps> = ({
   onClose
 }) => {
   const activeOpt = getQualityOption(currentQuality);
+  const optReal = actualQuality ? getQualityOption(actualQuality) : null;
+  const realDistinta = !!actualQuality && actualQuality !== currentQuality;
 
   return (
     <div className="w-80 sm:w-88 bg-black/95 border border-white/20 rounded-2xl p-4 shadow-2xl backdrop-blur-2xl text-white font-sans animate-fadeIn select-none z-50">
@@ -35,7 +41,13 @@ export const QualityMenuPopover: React.FC<QualityMenuPopoverProps> = ({
               Calidad y Resolución de Video
             </h3>
             <span className="text-[10px] text-gray-400 font-mono">
-              Actual: <strong className="text-red-400">{activeOpt.badge || activeOpt.shortLabel}</strong>
+              Elegida: <strong className="text-red-400">{activeOpt.badge || activeOpt.shortLabel}</strong>
+              {realDistinta && (
+                <>
+                  {' · '}
+                  reproduciendo: <strong className="text-amber-400">{optReal?.badge || actualQuality}</strong>
+                </>
+              )}
             </span>
           </div>
         </div>

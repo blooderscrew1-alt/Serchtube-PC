@@ -1952,6 +1952,7 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
         <div className="fixed bottom-28 sm:bottom-32 left-4 sm:left-6 z-50 animate-fadeIn">
           <QualityMenuPopover
             currentQuality={playerState.playbackQuality || 'auto'}
+            actualQuality={playerState.actualQuality}
             availableQualities={playerState.availableQualities}
             currentSpeed={playerState.playbackSpeed || 1.0}
             onSelectQuality={(q) => {
@@ -2490,6 +2491,11 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
               <span className="flex items-center gap-1.5">
                 <Sparkles size={12} className="text-red-400" />
                 Calidad: {currentQualityOption.badge || currentQualityOption.shortLabel}
+                {playerState.actualQuality && playerState.actualQuality !== (playerState.playbackQuality || 'auto') && (
+                  <span className="text-[9px] font-normal text-amber-400/90 font-mono">
+                    (real: {getQualityOption(playerState.actualQuality).shortLabel})
+                  </span>
+                )}
               </span>
               <span className="text-[9px] font-mono text-gray-400">cambiar</span>
             </button>

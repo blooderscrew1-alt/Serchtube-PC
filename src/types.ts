@@ -890,6 +890,13 @@ export interface PlayerState {
   isMuted: boolean;
   playbackSpeed: number;
   playbackQuality: VideoQuality;
+  /**
+   * Calidad que el reproductor de YouTube informa como REAL en este momento.
+   * Puede ser menor que la elegida (YouTube la baja al recargar, en segundo plano
+   * o si la conexión no da). Se usa solo para mostrarla: la preferencia del usuario
+   * vive en `playbackQuality` y nunca se sobrescribe con este valor.
+   */
+  actualQuality?: string;
   availableQualities: VideoQuality[];
   repeatMode: 'none' | 'one' | 'all';
   isDucked: boolean;

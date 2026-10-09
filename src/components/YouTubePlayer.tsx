@@ -176,9 +176,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
   // Calidad deseada por el usuario (se conserva aunque YouTube informe otra real)
   const desiredQualityRef = useRef<VideoQuality>(playerState.playbackQuality || 'auto');
-  // Última calidad REAL informada por YouTube (permite distinguir un eco de una orden)
-  const observedQualityRef = useRef<string | null>(null);
-  // Evita repetir la recarga de calidad al inicializar el reproductor
+  // Última calidad REAL informada por YouTube (solo informativa)
   const calidadInicialAplicadaRef = useRef<boolean>(false);
 
   // Centralized Video Loader - single entry point for all video loading
@@ -328,19 +326,13 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
           }
         },
         onPlaybackQualityChange: (event: any) => {
-          observedQualityRef.current = event.data;
-          const desired = latestPropsRef.current.playerState.playbackQuality;
-          if (desired && desired !== 'auto') {
-            if (event.data !== desired) {
-              enforceUserQuality();
-            }
-            return;
-          }
-
-          const newQuality = event.data as VideoQuality;
-          if (newQuality && newQuality !== lastAppliedQualityRef.current) {
-            lastAppliedQualityRef.current = newQuality;
-            latestPropsRef.current.onStateChange({ playbackQuality: newQuality });
+          // Solo se informa la calidad REAL observada. La preferencia del usuario
+          // (playerState.playbackQuality) NO se toca aqui: antes se sobrescribia con
+          // lo que reportaba YouTube (p. ej. 144p al recargar o en segundo plano) y el
+          // panel mostraba una calidad distinta a la elegida.
+          const observada = String(event.data || '');
+          if (observada) {
+            latestPropsRef.current.onStateChange({ actualQuality: observada });
           }
         },
         onPlaybackRateChange: (event: any) => {
@@ -556,15 +548,8 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       localStorage.setItem('serchtube_video_quality', targetQuality);
     } catch (e) {}
 
-    // Con 'auto' el reproductor informa la calidad REAL (p. ej. 'small') y el estado
-    // se actualiza para mostrarla. Eso es un ECO, no una elección del usuario: no se
-    // recarga nada y se conserva la preferencia 'auto'.
-    const esEco = observedQualityRef.current === targetQuality && desiredQualityRef.current !== targetQuality;
-    if (esEco) {
-      lastAppliedQualityRef.current = targetQuality as VideoQuality;
-      return;
-    }
-
+    // La preferencia del usuario nunca se sobrescribe con la calidad real observada,
+    // asi que aqui solo hay que aplicar de verdad cuando cambia la eleccion.
     const yaEraLaDeseada = desiredQualityRef.current === targetQuality;
     desiredQualityRef.current = targetQuality as VideoQuality;
 
