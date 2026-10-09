@@ -2123,6 +2123,28 @@ async function startServer() {
   let geminiTtsKeys: string[] = parseGeminiKeys(process.env.GEMINI_API_KEYS, process.env.GEMINI_API_KEY, process.env.GOOGLE_API_KEY).slice(0, 10);
   let workingKeyIdx = 0;
   let geminiKeysExhausted = false; // true solo si todas las claves agotaron su cuota
+  // Hasta cuando se considera que las claves de Google estan SIN CUOTA.
+  // Sin esto, cuando todas las claves ya estaban marcadas como muertas el bucle no
+  // se ejecutaba, geminiKeysExhausted quedaba en false y el servidor servia la voz
+  // robotica de Google Translate en lugar de avisar al cliente para que use las
+  // voces locales del navegador (mucho mejores).
+  let geminiQuotaDeadUntil = 0;
+
+  // Presupuestos de tiempo: una clave colgada o lenta no debe hacer esperar al usuario
+  const TTS_GEMINI_ATTEMPT_MS = 9000;   // por intento (por clave)
+  const TTS_GEMINI_BUDGET_MS = 14000;   // total para Gemini antes de pasar al respaldo
+  const TTS_ELEVEN_ATTEMPT_MS = 12000;  // por intento (por clave de ElevenLabs)
+  const TTS_TRANSLATE_MS = 7000;        // por trozo del respaldo gratuito
+
+  /** Rechaza si la promesa no termina en `ms` (evita cuelgues de red). */
+  function conLimite<T>(promesa: Promise<T>, ms: number, etiqueta: string): Promise<T> {
+    return Promise.race([
+      promesa,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`${etiqueta}: sin respuesta en ${ms} ms`)), Math.max(500, ms))
+      )
+    ]);
+  }
 
   // ── Marcas de claves muertas (cuota agotada / inválida) ──────────────────────
   // Sin esto, CADA síntesis reintentaba las 10 claves una por una y el botón
@@ -2213,7 +2235,7 @@ async function startServer() {
       const apiKey = elevenLabsKeys[keyIdx];
       if (isKeyDead(elevenKeyDeadUntil, apiKey)) continue; // sin cuota hace poco: no reintentar
       try {
-        const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+        const res = await conLimite(fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
           method: "POST",
           headers: {
             "xi-api-key": apiKey,
@@ -2224,7 +2246,7 @@ async function startServer() {
             model_id: ELEVEN_TTS_MODEL,
             voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true, speed }
           })
-        });
+        }), TTS_ELEVEN_ATTEMPT_MS, "ElevenLabs TTS");
         if (!res.ok) {
           lastElevenError = `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`;
           console.warn(`[TTS-ElevenLabs] Clave #${keyIdx + 1} falló:`, lastElevenError);
@@ -2304,12 +2326,12 @@ async function startServer() {
 
   async function fetchGoogleTranslateTts(text: string, lang = "es"): Promise<Buffer> {
     const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${lang}&client=tw-ob&total=1&idx=0&textlen=${text.length}`;
-    const res = await fetch(url, {
+    const res = await conLimite(fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
         "Referer": "https://translate.google.com/"
       }
-    });
+    }), TTS_TRANSLATE_MS, "Google Translate TTS");
     if (!res.ok) throw new Error(`Google Translate TTS HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   }
@@ -2321,11 +2343,14 @@ async function startServer() {
    * cuota diaria (429 o respuesta sin audio) o es inválida, prueba con la
    * siguiente. Devuelve null si ninguna clave pudo generar audio.
    */
-  async function synthesizeWithGemini(text: string, voice: string, style: string): Promise<{ body: Buffer; contentType: string } | null> {
+  async function synthesizeWithGemini(text: string, voice: string, style: string, budgetMs = TTS_GEMINI_BUDGET_MS): Promise<{ body: Buffer; contentType: string } | null> {
     if (geminiTtsKeys.length === 0) return null;
     lastGeminiTtsError = "";
     let sawQuota = false;
     let sawReject = false;
+    const inicio = Date.now();
+    // Si hace poco agotamos la cuota, ya se sabe que no hay nada que intentar.
+    geminiKeysExhausted = geminiQuotaDeadUntil > Date.now();
 
     const prompt = style ? `${style}\n\n${text}` : text;
     // Import del SDK cacheado: importarlo en cada llamada añadía latencia
@@ -2338,16 +2363,22 @@ async function startServer() {
       const apiKey = geminiTtsKeys[keyIdx];
       if (isKeyDead(geminiKeyDeadUntil, apiKey)) continue; // sin cuota hace poco: no reintentar
       aliveCount++;
+      const transcurrido = Date.now() - inicio;
+      if (transcurrido > budgetMs) {
+        console.warn(`[TTS] Gemini sin respuesta en ${transcurrido} ms: se pasa al respaldo`);
+        break;
+      }
+      const restante = Math.min(TTS_GEMINI_ATTEMPT_MS, Math.max(2000, budgetMs - transcurrido));
       try {
         const ai = new GoogleGenAI({ apiKey });
-        const response = await ai.models.generateContent({
+        const response = await conLimite<any>(ai.models.generateContent({
           model: GEMINI_TTS_MODELS[0],
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           config: {
             responseModalities: ["AUDIO"],
             speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
           } as any
-        });
+        }), restante, "Gemini TTS");
         const part = response.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData?.data);
         const b64 = (part as any)?.inlineData?.data;
         if (!b64) {
@@ -2356,10 +2387,12 @@ async function startServer() {
           console.warn(`[TTS] Clave #${keyIdx + 1} sin audio (cuota agotada probablemente)`);
           sawQuota = true;
           markKeyDead(geminiKeyDeadUntil, apiKey);
+          geminiQuotaDeadUntil = Date.now() + KEY_DEAD_TTL_MS;
           continue;
         }
         workingKeyIdx = keyIdx;
         geminiKeysExhausted = false;
+        geminiQuotaDeadUntil = 0; // volvio a funcionar: se limpia el estado de cuota
         const rateMatch = /rate=(\d+)/.exec((part as any)?.inlineData?.mimeType || "");
         const sampleRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
         return { body: pcmBufferToWav(Buffer.from(b64, "base64"), sampleRate), contentType: "audio/wav" };
@@ -2369,15 +2402,19 @@ async function startServer() {
         if (/API_KEY_INVALID|API key not valid|401|403/.test(lastGeminiTtsError)) {
           sawReject = true;
           markKeyDead(geminiKeyDeadUntil, apiKey);
-        } else if (/RESOURCE_EXHAUSTED|429/.test(lastGeminiTtsError)) {
+        } else if (/RESOURCE_EXHAUSTED|429|sin respuesta en/.test(lastGeminiTtsError)) {
           sawQuota = true;
           markKeyDead(geminiKeyDeadUntil, apiKey);
+          geminiQuotaDeadUntil = Date.now() + KEY_DEAD_TTL_MS;
         }
       }
     }
 
     // Solo consideramos "cuota agotada" si alguna clave alcanzó su límite
     // (si todas fueron rechazadas por inválidas, dejamos pasar al respaldo básico)
+    // OJO: si todas las claves ya estaban marcadas como muertas, el bucle no corre
+    // (aliveCount = 0) y antes se perdía el estado de cuota: ahora se conserva.
+    if (!sawQuota && aliveCount === 0 && geminiQuotaDeadUntil > Date.now()) sawQuota = true;
     geminiKeysExhausted = sawQuota;
     if (sawQuota) {
       console.warn(`[TTS] ${geminiTtsKeys.length} clave(s) sin cuota disponible. ${sawReject ? "Algunas además inválidas." : ""}`);
@@ -2389,6 +2426,7 @@ async function startServer() {
   }
 
   app.get("/api/tts", async (req, res) => {
+    const t0 = Date.now();
     try {
       const text = String(req.query.text || "").replace(/\s+/g, " ").trim().slice(0, 600);
       const voice = String(req.query.voice || "Puck");
@@ -2415,26 +2453,35 @@ async function startServer() {
         provider = "elevenlabs";
       }
 
-      // 2) Gemini TTS (respaldo: si ElevenLabs falló o no está configurado)
+      // 2) Gemini TTS (respaldo: si ElevenLabs falló o no está configurado).
+      // Se le da un presupuesto de tiempo acotado: si Google no responde rápido,
+      // se pasa al respaldo en vez de dejar al usuario esperando 30 segundos.
       if (!result) {
-        result = await synthesizeWithGemini(text, voice, style);
+        const restante = Math.max(3000, TTS_GEMINI_BUDGET_MS - (Date.now() - t0));
+        result = await synthesizeWithGemini(text, voice, style, restante);
         provider = "gemini";
       }
 
       if (!result && ((geminiTtsKeys.length > 0 && geminiKeysExhausted) || (engine === "elevenlabs" && elevenLabsQuotaExhausted))) {
         // Cuotas agotadas: NO usar Google Translate.
         // Responder 503 para que el cliente use las voces locales del navegador.
+        console.warn(`[TTS] Cuota agotada (${geminiKeysExhausted ? 'gemini' : 'elevenlabs'}): ${Date.now() - t0} ms, se usan voces locales`);
         res.set("X-TTS-Provider", "browser-fallback");
         return res.status(503).json({ error: "Cuota de voces neuronales agotada. Usando voces del navegador." });
       }
 
       if (!result) {
-        // Sin claves configuradas (o inválidas): respaldo gratuito Google Translate
+        // Sin claves configuradas (o inválidas): respaldo gratuito Google Translate.
+        // Los trozos se piden EN PARALELO: en serie una frase larga tardaba varios segundos.
         const chunks = splitTextForTts(text);
-        const buffers: Buffer[] = [];
-        for (const chunk of chunks) {
-          buffers.push(await fetchGoogleTranslateTts(chunk));
-        }
+        const partes = await Promise.all(
+          chunks.map((chunk) => fetchGoogleTranslateTts(chunk).catch((e) => {
+            console.warn("[TTS] Trozo de Google Translate falló:", e?.message);
+            return null;
+          }))
+        );
+        const buffers = partes.filter((b): b is Buffer => !!b && b.length > 0);
+        if (buffers.length === 0) throw new Error("Google Translate TTS no devolvió audio");
         result = { body: Buffer.concat(buffers), contentType: "audio/mpeg" };
         provider = "google-translate";
       }
@@ -2448,8 +2495,10 @@ async function startServer() {
       res.set({
         "Content-Type": result.contentType,
         "X-TTS-Provider": provider,
+        "X-TTS-Ms": String(Date.now() - t0),
         "Cache-Control": "public, max-age=86400"
       });
+      console.log(`[TTS] ${provider} · ${text.length} caracteres · ${Date.now() - t0} ms`);
       return res.send(result.body);
     } catch (err: any) {
       console.warn("[TTS] Error generando voz:", err?.message);
@@ -2459,11 +2508,16 @@ async function startServer() {
 
   // Estado de las claves de API (nunca devuelve las claves completas, solo enmascaradas)
   app.get("/api/tts-key", (req, res) => {
+    const quotaDead = geminiQuotaDeadUntil > Date.now();
     res.json({
       configured: geminiTtsKeys.length > 0,
       count: geminiTtsKeys.length,
       max: 10,
-      masked: geminiTtsKeys.map(k => `${k.slice(0, 5)}••••••${k.slice(-4)}`)
+      masked: geminiTtsKeys.map(k => `${k.slice(0, 5)}••••••${k.slice(-4)}`),
+      // Para que la interfaz pueda avisar POR QUE las voces de Google no suenan
+      quotaExhausted: quotaDead,
+      quotaRetryInSeconds: quotaDead ? Math.max(0, Math.round((geminiQuotaDeadUntil - Date.now()) / 1000)) : 0,
+      lastError: String(lastGeminiTtsError || "").slice(0, 200)
     });
   });
 

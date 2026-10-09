@@ -312,7 +312,10 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
   const [apiKeyInput, setApiKeyInput] = useState<string>('');
   const [apiKeyStatus, setApiKeyStatus] = useState<'idle' | 'saving' | 'ok' | 'invalid' | 'error'>('idle');
   const [apiKeyQuota, setApiKeyQuota] = useState<boolean>(false);
-  const [apiKeyInfo, setApiKeyInfo] = useState<{ configured: boolean; count: number; max: number; masked: string[] } | null>(null);
+  const [apiKeyInfo, setApiKeyInfo] = useState<{
+    configured: boolean; count: number; max: number; masked: string[];
+    quotaExhausted?: boolean; quotaRetryInSeconds?: number; lastError?: string;
+  } | null>(null);
 
   // ─── Respaldo de claves en el navegador (localStorage) ───
   // Las claves ya persisten en el .env del PC, pero si la carpeta del proyecto se
@@ -1836,6 +1839,21 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                       </span>
                     )}
                   </label>
+
+                  {apiKeyInfo?.quotaExhausted && (
+                    <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/30">
+                      <div className="text-[10px] font-bold text-red-300 mb-1">
+                        Tu clave de Google está SIN CUOTA (error 429): las voces de Google no pueden generar audio
+                      </div>
+                      <div className="text-[10px] text-red-200/80 leading-relaxed">
+                        Por eso la app está usando las voces locales del navegador (suenan al instante, pero
+                        menos realistas). El servidor volverá a intentar con Google en
+                        {apiKeyInfo.quotaRetryInSeconds ? ` ~${Math.max(1, Math.ceil(apiKeyInfo.quotaRetryInSeconds / 60))} min` : ' unos minutos'}.
+                        Para recuperarlas ya: pega otra clave aquí abajo o activa la facturación en
+                        https://aistudio.google.com/apikey (la cuota gratuita se renueva a diario).
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex items-start gap-2">
                     <textarea

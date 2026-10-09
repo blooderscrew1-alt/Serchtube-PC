@@ -169,9 +169,10 @@ export async function synthesizeNeuralSpeech(text: string, options: NeuralSynthe
   if (cached) return cached;
 
   const controller = new AbortController();
-  // Gemini TTS tarda más en generar (varios segundos por llamada); darle margen
-  // de 30 s para que el botón de prueba no muera antes de llegar el audio
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? (engine === 'gemini' ? 30000 : 15000));
+  const t0 = Date.now();
+  // El servidor tiene su propio presupuesto (Gemini 14 s y luego respaldo): el
+  // cliente espera un poco mas y, si no llega nada, la cadena pasa a la voz local.
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? (engine === 'gemini' ? 18000 : 15000));
   // Cancelación cooperativa: si llega una orden más nueva, aborta el fetch
   const abortPoll = options.shouldAbort
     ? setInterval(() => { if (options.shouldAbort!()) controller.abort(); }, 250)
@@ -187,11 +188,14 @@ export async function synthesizeNeuralSpeech(text: string, options: NeuralSynthe
     if (!res.ok) {
       throw new Error(`Servidor TTS respondió HTTP ${res.status}`);
     }
-    setProvider(res.headers.get('X-TTS-Provider') || 'desconocido');
+    const proveedor = res.headers.get('X-TTS-Provider') || 'desconocido';
+    setProvider(proveedor);
     const blob = await res.blob();
     if (blob.size < 100) {
       throw new Error('Respuesta TTS vacía o inválida');
     }
+    const msServidor = res.headers.get('X-TTS-Ms');
+    console.log(`[TTS] ${engine} listo en ${Date.now() - t0} ms (proveedor: ${proveedor}${msServidor ? `, servidor: ${msServidor} ms` : ''})`);
     cachePut(key, blob);
     return blob;
   } finally {
