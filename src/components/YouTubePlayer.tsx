@@ -5,6 +5,17 @@ import { Sparkles, Gauge, VolumeX, ArrowDown } from 'lucide-react';
 import { youtubeAuthService } from '../services/youtubeAuthService';
 import { AudioEngine } from '../services/audioEngine';
 
+/**
+ * La API de YouTube IGNORA `setPlaybackQuality()` desde hace años (está obsoleta):
+ * la única forma real de fijar la calidad es recargar el video con
+ * `suggestedQuality`. Nuestros ids ya son valores válidos de la API
+ * (highres, hd1080, hd720, large, medium, small, tiny) y 'auto' -> 'default'.
+ */
+function ytSuggestedQuality(calidad?: string): string {
+  if (!calidad || calidad === 'auto') return 'default';
+  return calidad;
+}
+
 interface YouTubePlayerProps {
   track: Track | null;
   playerState: PlayerState;
@@ -107,6 +118,10 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
     const desired = latestPropsRef.current.playerState.playbackQuality;
     if (desired && desired !== 'auto') {
       try {
+        // OJO: estas dos llamadas estan obsoletas en la API de YouTube y el
+        // reproductor las ignora. Se dejan solo por compatibilidad: la calidad real
+        // se fija al cargar el video con suggestedQuality y al cambiarla a mano con
+        // aplicarCalidadReal().
         if (typeof target.setPlaybackQuality === 'function') {
           target.setPlaybackQuality(desired);
         }
@@ -117,6 +132,54 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       } catch (e) {}
     }
   }, []);
+
+  /**
+   * Cambia la calidad DE VERDAD. La API ignora setPlaybackQuality, asi que hay que
+   * recargar el video indicando suggestedQuality y conservando el segundo actual
+   * (puede haber un instante de carga, es inevitable).
+   */
+  const aplicarCalidadReal = useCallback((calidad: string): boolean => {
+    const player: any = playerRef.current;
+    const videoId = latestPropsRef.current.track?.id || lastVideoIdRef.current;
+    if (!player || !videoId || typeof player.loadVideoById !== 'function') return false;
+
+    let tiempo = 0;
+    let estabaSonando = isPlayingIntentRef.current;
+    try {
+      tiempo = Math.max(0, Math.floor(player.getCurrentTime?.() ?? currentTimeRef.current ?? 0));
+      const estado = player.getPlayerState?.();
+      if (typeof estado === 'number') estabaSonando = estado === 1 || estado === 3;
+    } catch (e) {}
+
+    try {
+      const opciones = {
+        videoId,
+        suggestedQuality: ytSuggestedQuality(calidad),
+        startSeconds: tiempo
+      };
+      if (estabaSonando) {
+        player.loadVideoById(opciones);
+      } else if (typeof player.cueVideoById === 'function') {
+        player.cueVideoById(opciones);
+      } else {
+        player.loadVideoById(opciones);
+      }
+      lastAppliedQualityRef.current = calidad as VideoQuality;
+      currentTimeRef.current = tiempo;
+      console.log(`[YouTube] Calidad cambiada a ${calidad} (recargando desde ${tiempo}s)`);
+      return true;
+    } catch (err) {
+      console.warn('[YouTube] No pude cambiar la calidad:', err);
+      return false;
+    }
+  }, []);
+
+  // Calidad deseada por el usuario (se conserva aunque YouTube informe otra real)
+  const desiredQualityRef = useRef<VideoQuality>(playerState.playbackQuality || 'auto');
+  // Última calidad REAL informada por YouTube (permite distinguir un eco de una orden)
+  const observedQualityRef = useRef<string | null>(null);
+  // Evita repetir la recarga de calidad al inicializar el reproductor
+  const calidadInicialAplicadaRef = useRef<boolean>(false);
 
   // Centralized Video Loader - single entry point for all video loading
   const loadVideo = useCallback((videoId: string) => {
@@ -143,7 +206,11 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
     try {
       lastVideoIdRef.current = videoId;
-      playerRef.current.loadVideoById(videoId, 0);
+      playerRef.current.loadVideoById({
+        videoId,
+        suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
+        startSeconds: 0
+      });
       enforceUserQuality();
       setLoadError(null);
       currentTimeRef.current = 0;
@@ -153,6 +220,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       try {
         playerRef.current.loadVideoById({
           videoId: videoId,
+          suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
           startSeconds: 0
         });
         enforceUserQuality();
@@ -213,8 +281,14 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
             } catch (e) {}
           }
 
-          // Initial quality enforcement
+          // Initial quality enforcement: la API ya no acepta la calidad en el
+          // constructor, asi que si hay una preferencia guardada (no 'auto') se
+          // aplica con una recarga suave en el segundo 0.
           enforceUserQuality(event.target);
+          if (desiredQualityRef.current && desiredQualityRef.current !== 'auto' && !calidadInicialAplicadaRef.current) {
+            calidadInicialAplicadaRef.current = true;
+            aplicarCalidadReal(desiredQualityRef.current);
+          }
 
           // If there was a pending track waiting for player initialization
           if (pendingVideoIdRef.current && pendingVideoIdRef.current !== initialVideoId) {
@@ -254,6 +328,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
           }
         },
         onPlaybackQualityChange: (event: any) => {
+          observedQualityRef.current = event.data;
           const desired = latestPropsRef.current.playerState.playbackQuality;
           if (desired && desired !== 'auto') {
             if (event.data !== desired) {
@@ -481,27 +556,34 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       localStorage.setItem('serchtube_video_quality', targetQuality);
     } catch (e) {}
 
-    if (targetQuality !== lastAppliedQualityRef.current && playerRef.current && isPlayerReadyRef.current) {
-      try {
-        lastAppliedQualityRef.current = targetQuality;
-        if (targetQuality !== 'auto' && typeof playerRef.current.setPlaybackQuality === 'function') {
-          playerRef.current.setPlaybackQuality(targetQuality);
-          if (typeof playerRef.current.setPlaybackQualityRange === 'function') {
-            playerRef.current.setPlaybackQualityRange(targetQuality, targetQuality);
-          }
-        }
-        const opt = getQualityOption(targetQuality);
-        setQualityFeedback({
-          label: opt.label,
-          badge: opt.badge || opt.shortLabel,
-          timestamp: Date.now()
-        });
-        setTimeout(() => {
-          setQualityFeedback(prev => (prev && Date.now() - prev.timestamp >= 2400 ? null : prev));
-        }, 2500);
-      } catch (e) {}
+    // Con 'auto' el reproductor informa la calidad REAL (p. ej. 'small') y el estado
+    // se actualiza para mostrarla. Eso es un ECO, no una elección del usuario: no se
+    // recarga nada y se conserva la preferencia 'auto'.
+    const esEco = observedQualityRef.current === targetQuality && desiredQualityRef.current !== targetQuality;
+    if (esEco) {
+      lastAppliedQualityRef.current = targetQuality as VideoQuality;
+      return;
     }
-  }, [playerState.playbackQuality]);
+
+    const yaEraLaDeseada = desiredQualityRef.current === targetQuality;
+    desiredQualityRef.current = targetQuality as VideoQuality;
+
+    if (!playerRef.current || !isPlayerReadyRef.current) return;
+    // Misma calidad que ya estaba aplicada: no se recarga el video
+    if (yaEraLaDeseada && lastAppliedQualityRef.current === targetQuality) return;
+
+    if (aplicarCalidadReal(targetQuality)) {
+      const opt = getQualityOption(targetQuality);
+      setQualityFeedback({
+        label: opt.label,
+        badge: opt.badge || opt.shortLabel,
+        timestamp: Date.now()
+      });
+      setTimeout(() => {
+        setQualityFeedback(prev => (prev && Date.now() - prev.timestamp >= 2400 ? null : prev));
+      }, 2500);
+    }
+  }, [playerState.playbackQuality, aplicarCalidadReal]);
 
   // Synchronize Playback Speed ONLY when explicitly changed
   useEffect(() => {
@@ -588,7 +670,11 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       failedVideoIdsRef.current.clear();
       if (currentId && playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
         try {
-          playerRef.current.loadVideoById(currentId, Math.max(0, currentTimeRef.current));
+          playerRef.current.loadVideoById({
+            videoId: currentId,
+            suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
+            startSeconds: Math.max(0, currentTimeRef.current)
+          });
           playerRef.current.playVideo?.();
         } catch (e) {
           console.warn('Could not reload video:', e);
