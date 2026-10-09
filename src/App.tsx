@@ -451,6 +451,7 @@ export default function App() {
       speechVolume: 1.0,
       duckingEnabled: true,
       duckingVolume: 0,
+      edgeVoice: 'es-MX-JorgeNeural',
       continuousListening: false,
       useEdgeReadAloudVoice: true,
       ttsEngine: 'neural',

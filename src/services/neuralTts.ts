@@ -129,8 +129,8 @@ function cachePut(key: string, blob: Blob) {
 // ---------------------------------------------------------------------------
 
 export interface NeuralSynthesisOptions {
-  /** Motor neuronal: 'elevenlabs' (si hay voz configurada) o 'gemini' */
-  engine?: 'elevenlabs' | 'gemini';
+  /** Motor neuronal: 'elevenlabs', 'gemini' o 'edge' (voces en línea de Microsoft, gratis) */
+  engine?: 'elevenlabs' | 'gemini' | 'edge';
   /** Voz neuronal, ej: 'Puck' (Gemini) */
   voice?: string;
   /** Voz de ElevenLabs (voice_id) */

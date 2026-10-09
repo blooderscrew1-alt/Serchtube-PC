@@ -29,6 +29,11 @@ export interface SpeechConfig {
   speechVolume?: number;
   duckingEnabled: boolean;
   /**
+   * Voz neuronal EN LINEA de Microsoft Edge (gratis y sin clave), ej:
+   * 'es-MX-JorgeNeural'. Se usa cuando el motor elegido es 'edge'.
+   */
+  edgeVoice?: string;
+  /**
    * Volumen de la musica durante la atenuacion, en % (0-100, pasos de 10).
    * 0 = silencio total (predeterminado); 100 = sin atenuacion.
    */
@@ -259,6 +264,7 @@ export class SpeechService {
     speechVolume: 1.0,
     duckingEnabled: true,
     duckingVolume: 0,
+    edgeVoice: 'es-MX-JorgeNeural',
     continuousListening: true,
     useEdgeReadAloudVoice: true,
     ttsEngine: 'neural',
@@ -802,7 +808,7 @@ export class SpeechService {
    * (canal "Leer en voz alta" de Edge). Devuelve false si no se pudo iniciar, para
    * que el llamador haga fallback a las voces del navegador.
    */
-  private async speakWithNeural(sanitized: string, engine: 'elevenlabs' | 'gemini', finalRate: number, finalPitch: number, callId: number): Promise<boolean> {
+  private async speakWithNeural(sanitized: string, engine: 'elevenlabs' | 'gemini' | 'edge', finalRate: number, finalPitch: number, callId: number): Promise<boolean> {
     if (!isNeuralTtsSupported()) return false;
     // ElevenLabs solo si hay voz configurada (con clave guardada); si no, saltar al siguiente motor
     if (engine === 'elevenlabs' && !this.config.elevenVoice) return false;
@@ -824,7 +830,10 @@ export class SpeechService {
     try {
       blob = await synthesizeNeuralSpeech(sanitized, engine === 'elevenlabs'
         ? { engine: 'elevenlabs', elvoice: this.config.elevenVoice, speed: finalRate, shouldAbort }
-        : { engine: 'gemini', voice, style, shouldAbort }
+        : engine === 'edge'
+          // Voces neuronales EN LINEA de Microsoft Edge: gratis, sin clave ni cuenta
+          ? { engine: 'edge', voice: this.config.edgeVoice || 'es-MX-JorgeNeural', speed: finalRate, shouldAbort }
+          : { engine: 'gemini', voice, style, shouldAbort }
       );
     } catch (err) {
       if (!shouldAbort()) {
@@ -961,6 +970,10 @@ export class SpeechService {
         if (mySeq !== this.ttsSeq) return; // Una orden más nueva tomó el control
 
         if (engine === 'edge') {
+          // Primero las voces neuronales EN LINEA de Edge (gratis y sin clave); si el
+          // servicio no responde, se cae a las voces locales del navegador.
+          const hablo = await this.speakWithNeural(sanitized, 'edge', finalRate, finalPitch, mySeq);
+          if (hablo) return;
           return await this.speakWithBrowser(sanitized, finalRate, finalPitch);
         }
 

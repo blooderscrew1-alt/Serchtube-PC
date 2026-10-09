@@ -4,6 +4,7 @@ import http from "http";
 import path from "path";
 import os from "os";
 import fs from "fs";
+import { createHash, randomUUID } from "crypto";
 import { exec } from "child_process";
 import { WebSocketServer, WebSocket } from "ws";
 import { commandDispatcher, isResumeCommand, ENABLE_SMART_CORRECTION } from "./commandDispatcher.ts";
@@ -2463,6 +2464,131 @@ async function startServer() {
     return null;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // VOCES NEURONALES EN LINEA DE MICROSOFT EDGE ("Leer en voz alta")
+  // Gratis, SIN clave y practicamente ilimitadas (es el mismo servicio que usa el
+  // navegador Edge para leer paginas). Servicio NO documentado: si Microsoft cambia
+  // el token o bloquea la conexion, se devuelve null y el cliente usa las voces
+  // locales del navegador (comportamiento anterior).
+  // ═══════════════════════════════════════════════════════════════════════════
+  const EDGE_TTS_TOKEN = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+  // Version de Edge que se declara al servicio (si se queda vieja, responde 403)
+  const EDGE_TTS_VERSION = "143.0.3650.75";
+  const EDGE_TTS_MAJOR = EDGE_TTS_VERSION.split(".")[0];
+  const EDGE_TTS_WSS = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
+  const EDGE_TTS_VOICES_URL = "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list";
+  const EDGE_TTS_TIMEOUT_MS = 14000;
+  const EDGE_TTS_VOICE_DEFAULT = "es-MX-JorgeNeural";
+
+  /** Token Sec-MS-GEC: SHA256 de (tics de Windows redondeados a 5 min + token fijo) */
+  function edgeSecMsGec(): string {
+    const WIN_EPOCH = 11644473600;
+    let ticks = Date.now() / 1000 + WIN_EPOCH;
+    ticks -= ticks % 300;
+    return createHash("sha256")
+      .update(`${Math.floor(ticks * 1e7)}${EDGE_TTS_TOKEN}`, "ascii")
+      .digest("hex")
+      .toUpperCase();
+  }
+
+  function edgeCabeceras(): Record<string, string> {
+    return {
+      "Pragma": "no-cache",
+      "Cache-Control": "no-cache",
+      "Origin": "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+      "Sec-WebSocket-Version": "13",
+      "Accept-Encoding": "gzip, deflate, br, zstd",
+      "Accept-Language": "en-US,en;q=0.9",
+      "User-Agent": `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${EDGE_TTS_MAJOR}.0.0.0 Safari/537.36 Edg/${EDGE_TTS_MAJOR}.0.0.0`
+    };
+  }
+
+  function xmlSeguro(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  }
+
+  /** Genera MP3 con las voces neuronales en linea de Edge. null si no se pudo. */
+  async function synthesizeWithEdgeReadAloud(text: string, voice: string, speed = 1): Promise<{ body: Buffer; contentType: string } | null> {
+    const voz = /^[a-z]{2}-[A-Z]{2}-\w+Neural$/.test(voice) ? voice : EDGE_TTS_VOICE_DEFAULT;
+    const idioma = (voz.match(/^[a-z]{2}-[A-Z]{2}/) || ["es-MX"])[0];
+    const url = `${EDGE_TTS_WSS}?TrustedClientToken=${EDGE_TTS_TOKEN}&Sec-MS-GEC=${edgeSecMsGec()}` +
+      `&Sec-MS-GEC-Version=1-${EDGE_TTS_VERSION}&ConnectionId=${randomUUID()}`;
+
+    return await new Promise((resolve) => {
+      const trozos: Buffer[] = [];
+      let cerrado = false;
+      const terminar = (resultado: { body: Buffer; contentType: string } | null) => {
+        if (cerrado) return;
+        cerrado = true;
+        clearTimeout(temporizador);
+        try { ws.close(); } catch (_) {}
+        resolve(resultado);
+      };
+
+      let ws: any;
+      const temporizador = setTimeout(() => {
+        console.warn(`[TTS-Edge] sin respuesta en ${EDGE_TTS_TIMEOUT_MS} ms`);
+        terminar(null);
+      }, EDGE_TTS_TIMEOUT_MS);
+
+      try {
+        ws = new WebSocket(url, { headers: edgeCabeceras() });
+      } catch (err: any) {
+        console.warn("[TTS-Edge] no pude abrir el socket:", err?.message);
+        terminar(null);
+        return;
+      }
+
+      ws.on("open", () => {
+        const fecha = new Date().toString();
+        ws.send(`X-Timestamp:${fecha}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n` +
+          `{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},` +
+          `"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}`);
+        const porcentaje = Math.max(-50, Math.min(50, Math.round((Number(speed) || 1) - 1) * 100));
+        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${idioma}'>` +
+          `<voice name='${voz}'><prosody pitch='+0Hz' rate='${porcentaje >= 0 ? "+" : ""}${porcentaje}%' volume='+0%'>` +
+          `${xmlSeguro(text)}</prosody></voice></speak>`;
+        ws.send(`X-RequestId:${randomUUID().replace(/-/g, "")}\r\nContent-Type:application/ssml+xml\r\n` +
+          `X-Timestamp:${fecha}Z\r\nPath:ssml\r\n\r\n${ssml}`);
+      });
+
+      ws.on("message", (data: any, esBinario: boolean) => {
+        try {
+          if (esBinario) {
+            const buf = Buffer.from(data);
+            const largoCabecera = buf.readUInt16BE(0);
+            trozos.push(buf.subarray(2 + largoCabecera));
+          } else if (data.toString().includes("Path:turn.end")) {
+            const cuerpo = Buffer.concat(trozos);
+            terminar(cuerpo.length > 200 ? { body: cuerpo, contentType: "audio/mpeg" } : null);
+          }
+        } catch (err: any) {
+          console.warn("[TTS-Edge] error leyendo el audio:", err?.message);
+          terminar(null);
+        }
+      });
+
+      ws.on("error", (err: any) => {
+        console.warn("[TTS-Edge] error de conexion:", err?.message);
+        terminar(null);
+      });
+      ws.on("close", () => terminar(null));
+    });
+  }
+
+  // Lista de voces de Edge (se cachea 6 h: son 300+ voces)
+  let edgeVoces: { at: number; lista: any[] } = { at: 0, lista: [] };
+  async function obtenerVocesEdge(): Promise<any[]> {
+    if (edgeVoces.lista.length > 0 && Date.now() - edgeVoces.at < 6 * 60 * 60 * 1000) return edgeVoces.lista;
+    const url = `${EDGE_TTS_VOICES_URL}?trustedclienttoken=${EDGE_TTS_TOKEN}&Sec-MS-GEC=${edgeSecMsGec()}&Sec-MS-GEC-Version=1-${EDGE_TTS_VERSION}`;
+    const res = await conLimite(fetch(url, { headers: { ...edgeCabeceras(), "Accept": "*/*" } }), 10000, "Voces de Edge");
+    if (!res.ok) throw new Error(`Microsoft respondio HTTP ${res.status}`);
+    const lista: any = await res.json();
+    edgeVoces = { at: Date.now(), lista: Array.isArray(lista) ? lista : [] };
+    return edgeVoces.lista;
+  }
+
   app.get("/api/tts", async (req, res) => {
     const t0 = Date.now();
     try {
@@ -2471,6 +2597,7 @@ async function startServer() {
       const style = String(req.query.style || "").slice(0, 220);
       const engine = String(req.query.engine || "");           // 'elevenlabs' | 'gemini' | '' (auto)
       const elvoice = String(req.query.elvoice || "");         // voice_id de ElevenLabs
+      const edgevoice = String(req.query.edgevoice || "");     // voz neuronal de Edge (gratis)
       const speed = Math.max(0.7, Math.min(1.2, parseFloat(String(req.query.speed || "1")) || 1));
       if (!text) return res.status(400).json({ error: "Falta el parámetro text" });
 
@@ -2493,14 +2620,20 @@ async function startServer() {
       //    cliente siga con el siguiente modelo de su lista de prioridad (voces
       //    locales). Solo si NO hay ninguna clave guardada se usa el respaldo
       //    robótico gratuito de Google Translate.
-      const orden: Array<'elevenlabs' | 'gemini'> = engine === 'elevenlabs'
-        ? ['elevenlabs', 'gemini']
-        : engine === 'gemini'
-          ? ['gemini', 'elevenlabs']
-          : ((elvoice && elevenLabsKeys.length > 0) ? ['elevenlabs', 'gemini'] : ['gemini', 'elevenlabs']);
+      const orden: Array<'elevenlabs' | 'gemini' | 'edge'> = engine === 'edge'
+        ? ['edge']
+        : engine === 'elevenlabs'
+          ? ['elevenlabs', 'gemini', 'edge']
+          : engine === 'gemini'
+            ? ['gemini', 'elevenlabs', 'edge']
+            : ((elvoice && elevenLabsKeys.length > 0) ? ['elevenlabs', 'gemini', 'edge'] : ['gemini', 'elevenlabs', 'edge']);
 
       for (const modelo of orden) {
-        if (modelo === 'elevenlabs') {
+        if (modelo === 'edge') {
+          // Voz neuronal en linea de Edge: sin clave y sin costo
+          result = await synthesizeWithEdgeReadAloud(text, edgevoice || voice, speed);
+          if (result) { provider = 'edge'; break; }
+        } else if (modelo === 'elevenlabs') {
           if (elevenLabsKeys.length === 0 || !elvoice) continue;
           result = await synthesizeWithElevenLabs(text, elvoice, speed);
           if (result) { provider = 'elevenlabs'; break; }
@@ -2513,7 +2646,7 @@ async function startServer() {
       }
 
       const hayClaves = geminiTtsKeys.length > 0 || (elevenLabsKeys.length > 0 && !!elvoice);
-      if (!result && hayClaves) {
+      if (!result && hayClaves && engine !== 'edge') {
         // Hay claves guardadas pero ninguna pudo generar audio ahora mismo.
         const motivo = (geminiKeysExhausted || elevenLabsQuotaExhausted) ? 'quota' : 'error';
         console.warn(`[TTS] Ningun modelo con claves pudo sintetizar (${motivo}) en ${Date.now() - t0} ms: el cliente pasa al siguiente modelo`);
@@ -2555,6 +2688,24 @@ async function startServer() {
     } catch (err: any) {
       console.warn("[TTS] Error generando voz:", err?.message);
       return res.status(502).json({ error: "TTS no disponible" });
+    }
+  });
+
+  // Lista de voces neuronales en linea de Edge (gratis, sin clave). Por defecto
+  // solo las de español: son las que sirven para el asistente.
+  app.get("/api/edge-voices", async (req, res) => {
+    try {
+      const todas = await obtenerVocesEdge();
+      const espanol = todas.filter((v: any) => /^es-/i.test(String(v?.Locale || "")));
+      const lista = (espanol.length > 0 ? espanol : todas).map((v: any) => ({
+        name: String(v?.ShortName || ""),
+        gender: String(v?.Gender || ""),
+        locale: String(v?.Locale || "")
+      })).filter((v: any) => v.name);
+      res.json({ total: todas.length, spanish: espanol.length, default: EDGE_TTS_VOICE_DEFAULT, voices: lista });
+    } catch (err: any) {
+      // Si Microsoft no responde, la interfaz usa una lista corta de respaldo
+      res.status(502).json({ error: err?.message || "No pude consultar las voces de Edge", default: EDGE_TTS_VOICE_DEFAULT });
     }
   });
 

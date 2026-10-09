@@ -390,8 +390,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
     );
   };
 
-  const restoreFromBackup = async (provider: 'eleven' | 'gemini'): Promise<boolean> => {
-    try {
+  const restoreFromBackup = async (provider: 'eleven' | 'gemini'): Promise<boolean> => {    try {
       const storageKey = provider === 'eleven' ? ELEVEN_BACKUP : GEMINI_BACKUP;
       const backup: string[] = JSON.parse(localStorage.getItem(storageKey) || '[]');
       if (backup.length === 0) return false;
@@ -429,14 +428,35 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
     return unsub;
   }, []);
 
-  const [elevenKeyInput, setElevenKeyInput] = useState<string>('');
-  const [elevenStatus, setElevenStatus] = useState<'idle' | 'saving' | 'ok' | 'invalid' | 'error'>('idle');
+  const [elevenKeyInput, setElevenKeyInput] = useState<string>('');  const [elevenStatus, setElevenStatus] = useState<'idle' | 'saving' | 'ok' | 'invalid' | 'error'>('idle');
   const [elevenInfo, setElevenInfo] = useState<{
     configured: boolean; count: number; max: number; masked: string[];
     keys?: Array<{ index: number; masked?: string; ok: boolean; reason: string; detail?: string; retryInSeconds: number }>;
     quotaExhausted?: boolean; lastError?: string;
   } | null>(null);
   const [elevenVoices, setElevenVoices] = useState<Array<{ id: string; name: string; accent: string; gender: string }>>([]);
+
+  // Voces neuronales EN LINEA de Microsoft Edge (gratis, sin clave): se piden al
+  // servidor, que las consulta a Microsoft y las cachea. Si no responde, se usa la
+  // lista corta de respaldo (las de español mas usadas).
+  const EDGE_VOICES_FALLBACK = [
+    { name: 'es-MX-JorgeNeural', gender: 'Male', locale: 'es-MX' },
+    { name: 'es-MX-DaliaNeural', gender: 'Female', locale: 'es-MX' },
+    { name: 'es-ES-AlvaroNeural', gender: 'Male', locale: 'es-ES' },
+    { name: 'es-ES-ElviraNeural', gender: 'Female', locale: 'es-ES' },
+    { name: 'es-AR-TomasNeural', gender: 'Male', locale: 'es-AR' },
+    { name: 'es-AR-ElenaNeural', gender: 'Female', locale: 'es-AR' },
+    { name: 'es-CO-GonzaloNeural', gender: 'Male', locale: 'es-CO' },
+    { name: 'es-US-PalomaNeural', gender: 'Female', locale: 'es-US' }
+  ];
+  const [edgeVoices, setEdgeVoices] = useState<Array<{ name: string; gender: string; locale: string }>>([]);
+
+  useEffect(() => {
+    fetch('/api/edge-voices')
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d?.voices) && d.voices.length > 0) setEdgeVoices(d.voices); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch('/api/eleven-key')
@@ -1741,16 +1761,26 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                           </select>
                         )}
                         {current === 'edge' && (
-                          <select
-                            value={speechConfig.voiceURI || 'auto'}
-                            onChange={(e) => onUpdateSpeechConfig({ voiceURI: e.target.value })}
-                            className="w-full bg-black/80 border border-blue-500/30 rounded-lg px-2.5 py-1.5 text-xs text-blue-100 focus:border-blue-500 focus:outline-none cursor-pointer truncate"
-                          >
-                            <option value="auto">⭐ Automático: mejor voz Natural de Edge</option>
-                            {browserVoices.filter(v => (v.lang.startsWith('es') || /spanish/i.test(v.name))).map(v => (
-                              <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
-                            ))}
-                          </select>
+                          <div className="space-y-1.5">
+                            <select
+                              value={speechConfig.edgeVoice || 'es-MX-JorgeNeural'}
+                              onChange={(e) => onUpdateSpeechConfig({ edgeVoice: e.target.value })}
+                              className="w-full bg-black/80 border border-blue-500/30 rounded-lg px-2.5 py-1.5 text-xs text-blue-100 focus:border-blue-500 focus:outline-none cursor-pointer truncate"
+                            >
+                              <optgroup label="Neuronales en línea de Edge (gratis, sin clave)">
+                                {(edgeVoices.length > 0 ? edgeVoices : EDGE_VOICES_FALLBACK).map(v => (
+                                  <option key={v.name} value={v.name}>
+                                    {v.gender === 'Male' ? '♂' : '♀'} {v.name} ({v.locale})
+                                  </option>
+                                ))}
+                              </optgroup>
+                            </select>
+                            <p className="text-[10px] text-gray-400">
+                              Son las voces neuronales <strong className="text-gray-300">en línea</strong> de Microsoft
+                              Edge: gratis, sin clave ni cuenta. Si el servicio no responde, se usan las voces locales
+                              del sistema automáticamente.
+                            </p>
+                          </div>
                         )}
                       </div>
                     );
