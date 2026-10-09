@@ -3537,6 +3537,10 @@ export default function App() {
       }
     }
     if (typeof updates.playbackSpeed === 'number') {
+      // Se guarda para los proximos videos (antes solo la calidad se persistia)
+      try {
+        localStorage.setItem('serchtube_video_speed', String(updates.playbackSpeed));
+      } catch (e) {}
       if (nodeRoleRef.current === 'satellite') {
         NodeSyncService.getInstance().sendCommandToMaster({
           action: 'set_speed',

@@ -190,6 +190,10 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
   const [showVisualControls, setShowVisualControls] = useState<boolean>(false);
   const [showQualityMenu, setShowQualityMenu] = useState<boolean>(false);
   const [showTopMenu, setShowTopMenu] = useState<boolean>(false);
+  // Modo "video limpio": esconde TEMPORALMENTE las barras superior e inferior para
+  // ver y pulsar el video (el mismo botón que tiene el protector de pantalla), con
+  // una barra flotante para ajustar calidad, velocidad y opacidad.
+  const [modoVideoLimpio, setModoVideoLimpio] = useState<boolean>(false);
   const [showPlaylistQueueModal, setShowPlaylistQueueModal] = useState<boolean>(false);
   const [showYouTubeAuthModal, setShowYouTubeAuthModal] = useState<boolean>(false);
   const [isHostScannerOpen, setIsHostScannerOpen] = useState<boolean>(false);
@@ -390,6 +394,16 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
   const handleSelectSpeed = (speed: number) => {
     onPlayerStateChange({ playbackSpeed: speed });
   };
+
+  // En modo video limpio, ESC devuelve las barras
+  useEffect(() => {
+    if (!modoVideoLimpio) return;
+    const alPulsar = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setModoVideoLimpio(false);
+    };
+    window.addEventListener('keydown', alPulsar);
+    return () => window.removeEventListener('keydown', alPulsar);
+  }, [modoVideoLimpio]);
 
   const handleUpdateConfig = (updates: Partial<DisplayVisualConfig>) => {
     if (onUpdateVisualConfig) {
@@ -1163,7 +1177,9 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
 
       {/* Top Black Diffusion Gradient */}
       <div
-        className="fixed top-0 inset-x-0 h-44 sm:h-56 pointer-events-none z-10 transition-opacity duration-300"
+        className={`fixed top-0 inset-x-0 h-44 sm:h-56 pointer-events-none z-10 transition-opacity duration-300 ${
+          modoVideoLimpio ? 'opacity-0' : ''
+        }`}
         style={{
           background: `linear-gradient(to bottom, rgba(0,0,0,${effectiveTopFade}) 0%, rgba(0,0,0,${effectiveTopFade * 0.7}) 50%, rgba(0,0,0,0) 100%)`
         }}
@@ -1171,7 +1187,9 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
 
       {/* Bottom Black Diffusion Gradient */}
       <div
-        className="fixed bottom-0 inset-x-0 h-64 sm:h-80 pointer-events-none z-10 transition-opacity duration-300"
+        className={`fixed bottom-0 inset-x-0 h-64 sm:h-80 pointer-events-none z-10 transition-opacity duration-300 ${
+          modoVideoLimpio ? 'opacity-0' : ''
+        }`}
         style={{
           background: `linear-gradient(to top, rgba(0,0,0,${effectiveBottomFade}) 0%, rgba(0,0,0,${effectiveBottomFade * 0.7}) 50%, rgba(0,0,0,0) 100%)`
         }}
@@ -1201,7 +1219,9 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
       {/* 1. TOP NAV / HEADER (Manipulable dark background transparency - text & icons remain 100% sharp) */}
       <nav
         id="header-title-bar"
-        className="w-full h-16 flex items-center justify-between px-4 sm:px-8 relative z-30 transition-all duration-300 select-none"
+        className={`w-full h-16 items-center justify-between px-4 sm:px-8 relative z-30 transition-all duration-300 select-none ${
+          modoVideoLimpio ? 'hidden' : 'flex'
+        }`}
         style={{
           backgroundColor: `rgba(0, 0, 0, ${effectiveHeaderBg})`,
           borderBottom: `1px solid rgba(255, 255, 255, ${Math.max(0.04, effectiveHeaderBg * 0.15)})`
@@ -1279,6 +1299,17 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
             <span className="hidden sm:inline text-xs font-semibold">
               {hasBotAlert ? 'Aviso Bot' : isYouTubeAuthVerified ? `${googleProfile.displayName.split(' ')[0]} ✓` : 'Acceder con Google'}
             </span>
+          </button>
+
+          {/* Modo video limpio: esconde temporalmente las barras para ver y pulsar el video */}
+          <button
+            id="btn-nav-modo-video-limpio"
+            type="button"
+            onClick={() => setModoVideoLimpio(true)}
+            className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/15 text-gray-200 hover:text-white transition-all cursor-pointer flex items-center justify-center shadow-lg"
+            title="Modo video limpio: oculta las barras superior e inferior para ver y pulsar el video (se sale con el botón flotante o con ESC)"
+          >
+            <EyeOff size={18} />
           </button>
 
           {/* Unified Navigation Menu Icon */}
@@ -1483,7 +1514,9 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
       </nav>
 
       {/* 2. MAIN VIEWPORT: CENTERED COCKPIT STAGE WITH FLOATING ORB & WAVES */}
-      <main className="flex-1 flex flex-col justify-center items-center px-4 py-1 sm:py-2 w-full max-w-5xl mx-auto relative z-20 overflow-visible">
+      <main className={`flex-1 flex flex-col justify-center items-center px-4 py-1 sm:py-2 w-full max-w-5xl mx-auto relative z-20 overflow-visible ${
+        modoVideoLimpio ? 'pointer-events-none' : ''
+      }`}>
         <div className="relative w-full flex flex-col items-center justify-center overflow-visible">
           <ReactiveOrb
             status={systemStatus}
@@ -1934,7 +1967,9 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
       {/* 3. BOTTOM CAR-SAFE CONTROLS & STATUS FOOTER (Manipulable dark background transparency - text & scrubber remain 100% sharp) */}
       <footer
         id="footer-info-bar"
-        className="w-full p-3 sm:p-5 lg:p-6 relative z-20 transition-all duration-300 select-none"
+        className={`w-full p-3 sm:p-5 lg:p-6 relative z-20 transition-all duration-300 select-none ${
+          modoVideoLimpio ? 'hidden' : ''
+        }`}
         style={{
           backgroundColor: `rgba(0, 0, 0, ${effectiveFooterBg})`,
           borderTop: `1px solid rgba(255, 255, 255, ${Math.max(0.04, effectiveFooterBg * 0.15)})`
@@ -2393,6 +2428,89 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
           })()}
         </div>
       </footer>
+
+      {/* MODO VIDEO LIMPIO: barra flotante para ajustar el video sin las barras */}
+      {modoVideoLimpio && (
+        <div
+          id="modo-video-limpio-toolbar"
+          className="fixed bottom-4 right-4 z-[60] flex flex-col items-end gap-2 animate-fadeIn"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex flex-col gap-2.5 p-3 rounded-2xl bg-black/85 backdrop-blur-xl border border-white/15 shadow-2xl">
+            <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider text-gray-400">
+              <Sliders size={12} className="text-red-500" />
+              <span>Ajustes del video</span>
+            </div>
+
+            {/* Opacidad del video */}
+            <div className="flex items-center gap-2">
+              <Layers size={12} className="text-red-500 shrink-0" />
+              <input
+                type="range"
+                min="0.05"
+                max="1.0"
+                step="0.05"
+                value={effectiveVideoOpacity}
+                onChange={(e) => handleUpdateConfig({ videoOpacity: parseFloat(e.target.value) })}
+                className="w-32 accent-red-600 cursor-pointer"
+                title="Opacidad del video"
+              />
+              <span className="text-red-400 font-mono text-[11px] w-9 text-right">
+                {Math.round(effectiveVideoOpacity * 100)}%
+              </span>
+            </div>
+
+            {/* Velocidad de reproducción */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Gauge size={12} className="text-blue-400 shrink-0" />
+              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => handleSelectSpeed(s)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-mono border transition-all cursor-pointer ${
+                    Math.abs((playerState.playbackSpeed || 1) - s) < 0.01
+                      ? 'bg-blue-600 text-white border-blue-400 font-bold'
+                      : 'bg-white/5 text-gray-300 border-white/10 hover:text-white'
+                  }`}
+                  title={`Reproducir a ${s}x`}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+
+            {/* Calidad (abre el menú de calidad ya existente) */}
+            <button
+              type="button"
+              onClick={() => setShowQualityMenu((v) => !v)}
+              className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-red-600/20 hover:bg-red-600/35 border border-red-500/40 text-red-200 hover:text-white transition-all cursor-pointer text-[11px] font-bold"
+              title="Elegir calidad de video"
+            >
+              <span className="flex items-center gap-1.5">
+                <Sparkles size={12} className="text-red-400" />
+                Calidad: {currentQualityOption.badge || currentQualityOption.shortLabel}
+              </span>
+              <span className="text-[9px] font-mono text-gray-400">cambiar</span>
+            </button>
+
+            <p className="text-[9px] text-gray-500 leading-tight max-w-[230px]">
+              Calidad, velocidad y opacidad se guardan solas y se aplican a los próximos videos.
+            </p>
+          </div>
+
+          <button
+            id="btn-salir-modo-video-limpio"
+            type="button"
+            onClick={() => setModoVideoLimpio(false)}
+            className="flex items-center gap-2 px-3 py-2 rounded-2xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow-2xl cursor-pointer transition-colors"
+            title="Volver a mostrar las barras (o pulsa ESC)"
+          >
+            <Eye size={14} />
+            <span>Mostrar barras</span>
+          </button>
+        </div>
+      )}
 
       {/* MASTER PLAYLIST QUEUE MODAL / DRAWER (PRÓXIMAS 20 CANCIONES) */}
       {showPlaylistQueueModal && (
