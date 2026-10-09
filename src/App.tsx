@@ -1122,6 +1122,10 @@ export default function App() {
     // Set NodeSync callbacks before connecting WebSocket
     nodeSync.setCallbacks({
       onStateUpdate: (remoteState) => {
+        // SOLO un satélite refleja la cola que le manda el maestro. El maestro jamás
+        // reemplaza su propia cola: lo que difunde es "actual + 20 siguientes", y al
+        // volver por la red borraba la lista completa y reiniciaba el índice.
+        if (nodeRoleRef.current !== 'satellite') return;
         if (remoteState.playlistQueue && Array.isArray(remoteState.playlistQueue) && remoteState.playlistQueue.length > 0) {
           setPlaylistQueue(remoteState.playlistQueue);
           setPlaylistIndex(0);
@@ -1129,6 +1133,8 @@ export default function App() {
         setPlayerState(prev => ({ ...prev, ...remoteState }));
       },
       onPlaylistQueue: (queue) => {
+        // Igual que arriba: un satélite refleja; el maestro es la fuente de verdad.
+        if (nodeRoleRef.current !== 'satellite') return;
         if (Array.isArray(queue) && queue.length > 0) {
           setPlaylistQueue(queue);
           setPlaylistIndex(0);

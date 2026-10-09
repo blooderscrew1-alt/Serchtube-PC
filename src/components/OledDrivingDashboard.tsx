@@ -1118,53 +1118,44 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
     );
   }
 
-  // Build upcoming 20 songs queue for Master display (including currently playing at #1)
-  const displayQueueMaster: Track[] = [];
-  const masterSeenIds = new Set<string>();
-
-  const masterActiveTrack = playerState.currentTrack || (playlistQueue && playlistQueue[playlistIndex]);
-  if (masterActiveTrack && masterActiveTrack.id) {
-    masterSeenIds.add(masterActiveTrack.id);
-    displayQueueMaster.push({
-      ...masterActiveTrack,
-      thumbnail: masterActiveTrack.thumbnail && !masterActiveTrack.thumbnail.includes('unsplash')
-        ? masterActiveTrack.thumbnail
-        : `https://i.ytimg.com/vi/${masterActiveTrack.id}/hqdefault.jpg`
+  // COLA COMPLETA en su orden natural: reproducidas · actual · siguientes.
+  // Antes se reconstruia como "actual + 20 siguientes", asi que al pasar de cancion la
+  // anterior desaparecia de la lista y parecia que la cola se reemplazaba por una nueva.
+  const colaCompleta: Track[] = React.useMemo(() => {
+    const normalizar = (t: Track): Track => ({
+      ...t,
+      thumbnail: t.thumbnail && !t.thumbnail.includes('unsplash')
+        ? t.thumbnail
+        : (t.id ? `https://i.ytimg.com/vi/${t.id}/hqdefault.jpg` : '')
     });
-  }
+    const cola = Array.isArray(playlistQueue) ? playlistQueue.filter(t => t && t.id) : [];
+    if (cola.length > 0) return cola.map(normalizar);
+    const actual = playerState.currentTrack;
+    return actual && actual.id ? [normalizar(actual)] : [];
+  }, [playlistQueue, playerState.currentTrack]);
 
-  if (Array.isArray(playlistQueue) && playlistQueue.length > 0) {
-    const startIdx = typeof playlistIndex === 'number' && playlistIndex >= 0 ? playlistIndex + 1 : 1;
-    for (let i = startIdx; i < playlistQueue.length; i++) {
-      if (displayQueueMaster.length >= 20) break;
-      const track = playlistQueue[i];
-      if (track && track.id && !masterSeenIds.has(track.id)) {
-        masterSeenIds.add(track.id);
-        displayQueueMaster.push({
-          ...track,
-          thumbnail: track.thumbnail && !track.thumbnail.includes('unsplash')
-            ? track.thumbnail
-            : `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`
-        });
-      }
+  // Posicion de la cancion que esta sonando dentro de la lista mostrada
+  const indiceReproduciendo = React.useMemo(() => {
+    if (colaCompleta.length === 0) return 0;
+    const id = playerState.currentTrack?.id;
+    if (id) {
+      const i = colaCompleta.findIndex(t => t.id === id);
+      if (i >= 0) return i;
     }
+    return Math.min(Math.max(0, playlistIndex || 0), colaCompleta.length - 1);
+  }, [colaCompleta, playerState.currentTrack?.id, playlistIndex]);
 
-    if (displayQueueMaster.length < 20) {
-      for (let i = 0; i < Math.min(startIdx - 1, playlistQueue.length); i++) {
-        if (displayQueueMaster.length >= 20) break;
-        const track = playlistQueue[i];
-        if (track && track.id && !masterSeenIds.has(track.id)) {
-          masterSeenIds.add(track.id);
-          displayQueueMaster.push({
-            ...track,
-            thumbnail: track.thumbnail && !track.thumbnail.includes('unsplash')
-              ? track.thumbnail
-              : `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg`
-          });
-        }
-      }
-    }
-  }
+  // Al abrir la lista, se lleva la vista a la cancion que esta sonando
+  const filaActualRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!showPlaylistQueueModal) return;
+    const t = setTimeout(() => {
+      try {
+        filaActualRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (_) {}
+    }, 120);
+    return () => clearTimeout(t);
+  }, [showPlaylistQueueModal]);
 
   // MASTER / MAIN CAR SOUNDBAR DASHBOARD - ELEGANT DARK THEME
   return (
@@ -1262,11 +1253,11 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
                 ? 'bg-red-600 border-red-500 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]'
                 : 'bg-white/10 hover:bg-white/20 border-white/15 text-gray-200 hover:text-white'
             }`}
-            title="Lista de reproducción (próximas 20 canciones)"
+            title="Lista de reproducción completa (reproducidas, actual y siguientes)"
           >
             <ListMusic size={18} className={showPlaylistQueueModal ? "text-white" : "text-red-400"} />
             <span className="hidden sm:inline text-xs font-mono font-bold text-gray-200">
-              {displayQueueMaster.length}
+              {colaCompleta.length}
             </span>
           </button>
 
@@ -2532,7 +2523,7 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
                   <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
                     Lista de Reproducción
                     <span className="text-xs font-mono font-bold text-red-400 bg-red-950/60 px-2 py-0.5 rounded border border-red-900/50">
-                      {displayQueueMaster.length} {displayQueueMaster.length === 1 ? 'canción' : 'canciones'}
+                      {colaCompleta.length} {colaCompleta.length === 1 ? 'canción' : 'canciones'}
                     </span>
                   </h3>
                   <p className="text-xs text-gray-400">
@@ -2551,15 +2542,16 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
 
             {/* Modal List Body */}
             <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
-              {displayQueueMaster.length === 0 ? (
+              {colaCompleta.length === 0 ? (
                 <div className="text-center py-12 bg-black/30 rounded-2xl border border-white/5">
                   <Music size={32} className="mx-auto text-gray-500 mb-2 opacity-50" />
                   <p className="text-sm text-gray-300 font-medium">No hay canciones en la cola</p>
                   <p className="text-xs text-gray-500 mt-1">Busca una canción o artista para iniciar la lista</p>
                 </div>
               ) : (
-                displayQueueMaster.map((track, idx) => {
-                  const isCurrent = idx === 0;
+                colaCompleta.map((track, idx) => {
+                  const isCurrent = idx === indiceReproduciendo;
+                  const isPlayed = idx < indiceReproduciendo;
                   const thumbUrl = track.thumbnail && !track.thumbnail.includes('unsplash')
                     ? track.thumbnail
                     : (track.id ? `https://i.ytimg.com/vi/${track.id}/hqdefault.jpg` : '');
@@ -2567,6 +2559,7 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
                   return (
                     <div
                       key={`master-${track.id}-${idx}`}
+                      ref={isCurrent ? filaActualRef : undefined}
                       onClick={() => {
                         onSelectTrackFromQueue && onSelectTrackFromQueue(track, idx);
                         setShowPlaylistQueueModal(false);
@@ -2574,7 +2567,9 @@ const OledDrivingDashboardComponent: React.FC<OledDrivingDashboardProps> = ({
                       className={`group flex items-center gap-3.5 p-3 rounded-2xl border transition-all cursor-pointer select-none active:scale-[0.99] ${
                         isCurrent
                           ? 'bg-gradient-to-r from-red-950/50 via-zinc-900/80 to-black/60 border-red-500/60 shadow-[0_0_20px_rgba(220,38,38,0.25)]'
-                          : 'bg-black/40 hover:bg-white/5 border-white/5 hover:border-white/20'
+                          : isPlayed
+                            ? 'bg-black/25 hover:bg-white/5 border-white/5 opacity-55'
+                            : 'bg-black/40 hover:bg-white/5 border-white/5 hover:border-white/20'
                       }`}
                     >
                       {/* Number / Soundwave */}
