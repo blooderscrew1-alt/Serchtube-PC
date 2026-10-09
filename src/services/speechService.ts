@@ -859,7 +859,12 @@ export class SpeechService {
 
       try {
         const audio = new Audio(URL.createObjectURL(blob));
-        audio.volume = Math.max(0.1, Math.min(1.0, this.config.speechVolume ?? 1.0));
+        const volumenVoz = Math.max(0.1, Math.min(1.0, this.config.speechVolume ?? 1.0));
+        // La voz neuronal se enruta por el ecualizador (es lo unico ecualizable: la
+        // musica de YouTube vive en un iframe protegido y no se puede procesar).
+        // Si queda enrutada, el volumen se aplica en el grafo y no en el elemento.
+        const enrutada = AudioEngine.getInstance().connectMediaElement(audio, volumenVoz);
+        audio.volume = enrutada ? 1.0 : volumenVoz;
         this.neuralAudioEl = audio;
 
         audio.onended = () => {

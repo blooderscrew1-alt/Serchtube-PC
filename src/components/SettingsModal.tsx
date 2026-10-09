@@ -2343,6 +2343,18 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
             </div>
+
+            <div className="mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30">
+              <div className="text-[11px] font-semibold text-amber-200 mb-1">¿Qué procesa realmente este ecualizador?</div>
+              <div className="text-[10px] text-amber-100/80 leading-relaxed">
+                Afecta la <b>voz del asistente</b> y los <b>avisos</b> de la aplicación.
+                La música de YouTube se reproduce dentro de un reproductor protegido del
+                navegador y <b>ningún</b> ecualizador web puede procesarla (el audio de un
+                iframe externo no es accesible). Para ecualizar la música necesitas un EQ
+                del sistema (Equalizer APO, gratis, aplica a todo el sonido de Windows) o
+                una extensión del navegador que procese el audio de la pestaña.
+              </div>
+            </div>
           </CollapsibleSection>
 
           {/* Section 3.3: Auto Volume Inactivity Reducer ("bajar el volumen después de cierto tiempo de inactividad sin música") */}

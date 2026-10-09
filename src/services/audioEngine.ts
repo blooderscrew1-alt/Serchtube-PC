@@ -4,6 +4,8 @@ export class AudioEngine {
   private static instance: AudioEngine | null = null;
   private audioCtx: AudioContext | null = null;
   private bassFilter: BiquadFilterNode | null = null;
+  // Ultima fuente de audio externa enrutada por el ecualizador (voz neuronal)
+  private mediaElementSource: MediaElementAudioSourceNode | null = null;
   private midFilter: BiquadFilterNode | null = null;
   private presenceFilter: BiquadFilterNode | null = null;
   private trebleFilter: BiquadFilterNode | null = null;
@@ -256,6 +258,42 @@ export class AudioEngine {
   }
 
   /**
+   * Enruta un elemento de audio externo (la voz neuronal del asistente) por el
+   * ecualizador. Devuelve true si quedo enrutado; false = reproducirlo normal.
+   *
+   * Nota: la musica de YouTube NO se puede enrutar. Vive en un iframe de otro origen
+   * y el navegador no expone su audio al grafo Web Audio, asi que ningun ecualizador
+   * web puede procesarla (para eso hace falta un EQ del sistema o una extension que
+   * capture el audio de la pestana).
+   */
+  public connectMediaElement(el: HTMLMediaElement, volume = 1): boolean {
+    try {
+      this.init();
+      if (!this.audioCtx || !this.bassFilter) return false;
+      // Con el contexto suspendido el grafo no suena: mejor dejarlo directo.
+      if (this.audioCtx.state !== 'running') {
+        this.resume();
+        return false;
+      }
+
+      if (this.mediaElementSource) {
+        try { this.mediaElementSource.disconnect(); } catch (_) {}
+        this.mediaElementSource = null;
+      }
+
+      const source = this.audioCtx.createMediaElementSource(el);
+      const gain = this.audioCtx.createGain();
+      gain.gain.setValueAtTime(Math.max(0, Math.min(1, volume)), this.audioCtx.currentTime);
+      source.connect(gain).connect(this.bassFilter);
+      this.mediaElementSource = source;
+      return true;
+    } catch (e) {
+      console.warn('AudioEngine connectMediaElement:', e);
+      return false;
+    }
+  }
+
+  /**
    * Emits a crisp, pleasant audio beep (e.g. for volume confirmation without interrupting TTS voice)
    */
   public playBeep(type: 'up' | 'down' | 'neutral' = 'neutral') {
@@ -292,7 +330,9 @@ export class AudioEngine {
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.1);
 
       osc.connect(gain);
-      gain.connect(this.audioCtx.destination);
+      // Los avisos pasan por el ecualizador (antes iban directo a la salida y por eso
+      // el ecualizador no tenia ningun efecto audible).
+      gain.connect(this.bassFilter ? this.bassFilter : this.audioCtx.destination);
 
       osc.start(now);
       osc.stop(now + 0.11);

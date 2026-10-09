@@ -29,5 +29,11 @@ console.log('al atenuar avisa:', JSON.stringify(aviso));
 if (!aviso || (aviso as any).vol !== 40) { console.log('FALLA: el callback no recibio 40%'); ok = false; }
 e.stopDucking();
 
+// Sin Web Audio (este entorno no tiene AudioContext) el enrutado por el ecualizador
+// debe devolver false, para que la voz se reproduzca normal en vez de quedar muda.
+const enrutado = e.connectMediaElement({} as any, 1);
+console.log('connectMediaElement sin Web Audio ->', enrutado, enrutado === false ? 'OK (se reproduce normal)' : 'FALLA');
+if (enrutado !== false) ok = false;
+
 console.log(ok ? '\nTODO OK' : '\nHAY FALLAS');
 process.exit(ok ? 0 : 1);

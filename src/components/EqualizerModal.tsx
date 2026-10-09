@@ -158,6 +158,18 @@ const EqualizerModalComponent: React.FC<EqualizerModalProps> = ({
         <div className="p-6 space-y-6 overflow-y-auto">
           {activeTab === 'eq' && (
             <>
+              {/* Alcance real del ecualizador (honestidad con el usuario) */}
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30">
+                <div className="text-[11px] font-semibold text-amber-200 mb-1">
+                  Este ecualizador procesa la voz del asistente y los avisos, no la música de YouTube
+                </div>
+                <div className="text-[10px] text-amber-100/80 leading-relaxed">
+                  El navegador no permite procesar el audio de un reproductor incrustado (iframe) por
+                  seguridad. Para ecualizar la música usa un EQ del sistema (Equalizer APO, gratis,
+                  aplica a todo el sonido de Windows) o una extensión que procese el audio de la pestaña.
+                </div>
+              </div>
+
               {/* MASTER EQUALIZER TOGGLE SWITCH BANNER */}
               <div className={`p-4 rounded-xl border transition-all ${
                 isEqEnabled
