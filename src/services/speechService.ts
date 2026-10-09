@@ -272,6 +272,9 @@ export class SpeechService {
   private micStream: MediaStream | null = null;
   private commandCooldownUntil = 0;
   private ttsGuardUntil = 0;
+  // ¿Hay una locución del navegador en curso? Se rastrea a mano porque el flag global
+  // speechSynthesis.speaking puede quedar atascado (ver isInCooldown).
+  private browserUtteranceActive = false;
   private lastSpokenText = '';
   private lastSpokenTimestamp = 0;
   private lastSpeakRequestAt = 0;
@@ -406,11 +409,24 @@ export class SpeechService {
 
   public isInCooldown(): boolean {
     const now = Date.now();
-    const isTtsSpeaking =
-      this.isSynthesizing ||
-      (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking) ||
-      now < this.ttsGuardUntil;
-    return (now < this.commandCooldownUntil || isTtsSpeaking) && !this.isProcessingCommand;
+    // OJO: aquí NO se consulta window.speechSynthesis.speaking. Ese flag se queda
+    // ATASCADO en true en Chromium (tras un cancel() o una locución que nunca arranca),
+    // y como App descartaba el audio antes de buscar la palabra clave, el micrófono
+    // quedaba sordo para siempre aunque el vúmetro siguiera moviéndose.
+    // Ahora solo se cree en nuestro propio seguimiento.
+    const hablando = this.isSynthesizing || this.browserUtteranceActive || now < this.ttsGuardUntil;
+    return (now < this.commandCooldownUntil || hablando) && !this.isProcessingCommand;
+  }
+
+  /** Motivo por el que ahora mismo se ignorarían los audios (vacío = escuchando) */
+  public getBlockReason(): string {
+    const now = Date.now();
+    if (this.isProcessingCommand) return '';
+    if (this.isSynthesizing) return 'sintetizando voz';
+    if (this.browserUtteranceActive) return 'voz del navegador sonando';
+    if (now < this.ttsGuardUntil) return `inmunidad de eco (${Math.ceil((this.ttsGuardUntil - now) / 1000)}s)`;
+    if (now < this.commandCooldownUntil) return `espera post-orden (${((this.commandCooldownUntil - now) / 1000).toFixed(1)}s)`;
+    return '';
   }
 
   private initRecognition() {
@@ -1098,8 +1114,15 @@ export class SpeechService {
         if (hasCompleted) return;
         hasCompleted = true;
         this.isSynthesizing = false;
+        this.browserUtteranceActive = false;
         this.lastSpokenTimestamp = Date.now();
         this.ttsGuardUntil = Date.now() + 900; // 900ms acoustic echo decay buffer
+        // Se cancela para CURAR el estado del navegador si se quedó colgado
+        try {
+          if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+            window.speechSynthesis.cancel();
+          }
+        } catch (_) {}
         if (this.config.duckingEnabled) {
           AudioEngine.getInstance().stopDucking();
         }
@@ -1114,6 +1137,7 @@ export class SpeechService {
       setTimeout(finishSpeaking, 4000);
 
       // Slight delay allows Chromium/Edge's internal audio dispatcher to stabilize after cancel()
+      this.browserUtteranceActive = true;
       setTimeout(() => {
         try {
           window.speechSynthesis.speak(utterance);

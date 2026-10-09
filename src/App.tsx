@@ -1302,21 +1302,17 @@ export default function App() {
         const isAwaiting = isAwaitingCommandRef.current;
         const isDirectActive = isDirectMicActiveRef.current;
 
-        // 🛡️ Inmunidad Acústica: Descartar audios de altavoces solo cuando NO estamos en escucha activa de orden
-        if (!isAwaiting && !isDirectActive) {
-          if (SpeechService.getInstance().isInCooldown() || Date.now() < playbackCooldownUntilRef.current) {
-            return;
-          }
-        }
+        // 1) La palabra clave se evalúa SIEMPRE y PRIMERO. Es la única forma de
+        //    recuperar al asistente y no puede ser eco: el TTS nunca la pronuncia
+        //    (sanitizeTextForTTS la reemplaza). Antes la inmunidad acústica se revisaba
+        //    antes que esto y, si el navegador se quedaba reportando "hablando" (bug de
+        //    Chromium), el micrófono quedaba sordo PARA SIEMPRE aunque el vúmetro siguiera
+        //    moviéndose.
+        const parsed = wakeEnabled ? parseWakeWord(transcript, wakeWordStr) : null;
+        const traePalabraClave = !!parsed?.hasWakeWord;
 
-        // Si la palabra clave está activa pero no estamos escuchando una petición activa (ni por voz previamente activada ni por botón directo)
-        if (wakeEnabled && !isAwaiting && !isDirectActive) {
-          const parsed = parseWakeWord(transcript, wakeWordStr);
-          if (!parsed.hasWakeWord) {
-            // Ignorar por completo cualquier ruido o palabra antes de que se diga la palabra clave
-            return;
-          }
-          // Si contiene la palabra clave, salir de pantalla de bloqueo y activar de inmediato el orbe con animación de micrófono
+        if (wakeEnabled && !isAwaiting && !isDirectActive && traePalabraClave && parsed) {
+          // Salir de pantalla de bloqueo y activar de inmediato el orbe con animación de micrófono
           setIsScreensaverActive(false);
           setIsAwaitingCommandAfterWakeWord(true);
           isAwaitingCommandRef.current = true;
@@ -1324,13 +1320,31 @@ export default function App() {
           setSystemStatus('listening');
           setIsListening(true);
           setLastTranscript(parsed.isWakeWordOnly ? '' : parsed.commandText);
-          // 🎚️ Atenuar la música YA (ruta interina): esta es la vía por la que pasa casi
-          // siempre la detección con "micrófono caliente"; antes solo bajaba al llegar el final
+          // 🎚️ Atenuar la música YA (ruta interina)
           if (playerStateRef.current.isPlaying) {
             AudioEngine.getInstance().startDucking(150);
           }
-        } else {
-          // Si la palabra clave está desactivada o ya estamos en el flujo activo de escucha
+        }
+
+        // 2) Inmunidad acústica: se aplica SOLO al audio que no trae la palabra clave
+        if (!isAwaiting && !isDirectActive && !traePalabraClave) {
+          if (SpeechService.getInstance().isInCooldown() || Date.now() < playbackCooldownUntilRef.current) {
+            const motivo = SpeechService.getInstance().getBlockReason() || 'ventana de 3 s';
+            if (isFinal) {
+              console.log(`[SerchTube] ⏱️ Audio descartado por inmunidad acústica (${motivo}): "${transcript.slice(0, 40)}"`);
+            }
+            return;
+          }
+        }
+
+        // 3) Con la palabra clave activa, el ruido sin ella se ignora (como antes)
+        if (wakeEnabled && !isAwaiting && !isDirectActive && !traePalabraClave) {
+          return;
+        }
+
+        // Palabra clave desactivada, o ya estamos en el flujo activo de escucha.
+        // (Si la frase traía la palabra clave, se conserva el texto del comando ya puesto.)
+        if (!traePalabraClave && !isAwaiting && !isDirectActive) {
           setLastTranscript(transcript);
         }
 
