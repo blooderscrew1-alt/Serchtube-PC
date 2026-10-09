@@ -314,6 +314,7 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
   const [apiKeyQuota, setApiKeyQuota] = useState<boolean>(false);
   const [apiKeyInfo, setApiKeyInfo] = useState<{
     configured: boolean; count: number; max: number; masked: string[];
+    keys?: Array<{ index: number; masked?: string; ok: boolean; reason: string; detail?: string; retryInSeconds: number }>;
     quotaExhausted?: boolean; quotaRetryInSeconds?: number; lastError?: string;
   } | null>(null);
 
@@ -342,6 +343,51 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
       }
       localStorage.setItem(storageKey, JSON.stringify(merged.slice(0, 10)));
     } catch (_) {}
+  };
+
+  /**
+   * Muestra la rotación de claves de un modelo: cuántas tienen crédito y el estado
+   * de cada una (asi se ve por qué saltó a la siguiente clave o al siguiente modelo).
+   */
+  const renderKeyStates = (
+    info: { keys?: Array<{ index: number; masked?: string; ok: boolean; reason: string; detail?: string; retryInSeconds: number }> } | null
+  ) => {
+    if (!info?.keys || info.keys.length === 0) return null;
+    const conCredito = info.keys.filter(k => k.ok).length;
+    const etiqueta = (k: { ok: boolean; reason: string }) =>
+      k.ok ? 'con crédito'
+        : k.reason === 'quota' ? 'sin cuota'
+        : k.reason === 'invalid' ? 'inválida'
+        : 'reintentando';
+    return (
+      <div className="space-y-1 p-2 rounded-lg bg-white/[0.03] border border-white/10">
+        <div className="text-[10px] text-gray-300">
+          Rotación de claves:{' '}
+          <span className={conCredito > 0 ? 'text-emerald-300 font-semibold' : 'text-red-300 font-semibold'}>
+            {conCredito} de {info.keys.length} con crédito
+          </span>
+          <span className="text-gray-500"> — si una se agota, se usa la siguiente del mismo modelo; si se agotan todas, pasa al siguiente modelo de la lista.</span>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {info.keys.map(k => (
+            <span
+              key={k.index}
+              title={k.detail || ''}
+              className={`text-[9px] px-1.5 py-0.5 rounded font-mono border ${
+                k.ok
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                  : k.reason === 'invalid'
+                    ? 'bg-red-500/15 text-red-300 border-red-500/30'
+                    : 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+              }`}
+            >
+              #{k.index} {etiqueta(k)}
+              {!k.ok && k.retryInSeconds > 0 ? ` · ${Math.max(1, Math.ceil(k.retryInSeconds / 60))} min` : ''}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
   };
 
   const restoreFromBackup = async (provider: 'eleven' | 'gemini'): Promise<boolean> => {
@@ -378,12 +424,18 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
         setApiKeyInfo(info);
       })
       .catch(() => setApiKeyInfo(null));
+    // Estado de las claves de ElevenLabs (rotación por modelo)
+    fetch('/api/eleven-key').then(r => r.json()).then(info => setElevenInfo(info)).catch(() => {});
     return unsub;
   }, []);
 
   const [elevenKeyInput, setElevenKeyInput] = useState<string>('');
   const [elevenStatus, setElevenStatus] = useState<'idle' | 'saving' | 'ok' | 'invalid' | 'error'>('idle');
-  const [elevenInfo, setElevenInfo] = useState<{ configured: boolean; count: number; max: number; masked: string[] } | null>(null);
+  const [elevenInfo, setElevenInfo] = useState<{
+    configured: boolean; count: number; max: number; masked: string[];
+    keys?: Array<{ index: number; masked?: string; ok: boolean; reason: string; detail?: string; retryInSeconds: number }>;
+    quotaExhausted?: boolean; lastError?: string;
+  } | null>(null);
   const [elevenVoices, setElevenVoices] = useState<Array<{ id: string; name: string; accent: string; gender: string }>>([]);
 
   useEffect(() => {
@@ -1776,6 +1828,8 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                     <p className="text-[10px] text-red-300">✗ No se pudo contactar al servidor para guardar las claves.</p>
                   )}
 
+                  {renderKeyStates(elevenInfo)}
+
                   <p className="text-[10px] text-gray-400 leading-relaxed">
                     Cuentas gratis en <strong className="text-gray-300">elevenlabs.io</strong>: ~10.000 caracteres/mes por cuenta. Con varias claves la app rota sola y multiplica tus respuestas (hasta 10 claves). Cuando todas se agoten, cae a Gemini y luego a las voces del navegador.
                   </p>
@@ -1854,6 +1908,8 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {renderKeyStates(apiKeyInfo)}
 
                   <div className="flex items-start gap-2">
                     <textarea
