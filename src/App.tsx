@@ -186,6 +186,7 @@ export default function App() {
     let savedNonStop = true;
     let savedQuality: any = 'auto';
     let savedSpeed = 1.0;
+    let savedTrack: Track | null = null;
     try {
       const stored = localStorage.getItem('serchtube_nonstop');
       if (stored !== null) savedNonStop = stored === 'true';
@@ -193,11 +194,17 @@ export default function App() {
       if (q) savedQuality = q;
       const spd = localStorage.getItem('serchtube_video_speed');
       if (spd) savedSpeed = parseFloat(spd) || 1.0;
+      // Ultima cancion reproducida: se restaura en pausa (no arranca sola)
+      const rawTrack = localStorage.getItem('serchtube_last_track');
+      if (rawTrack) {
+        const t = JSON.parse(rawTrack);
+        if (t && t.id) savedTrack = t;
+      }
     } catch (e) {}
 
     return {
       isPlaying: false,
-      currentTrack: null,
+      currentTrack: savedTrack,
       currentTime: 0,
       duration: 0,
       volume: 10,
@@ -212,8 +219,56 @@ export default function App() {
   });
 
   // Current playlist queue & index from YouTube / catalog
-  const [playlistQueue, setPlaylistQueue] = useState<Track[]>([]);
-  const [playlistIndex, setPlaylistIndex] = useState<number>(0);
+  // Se restauran desde localStorage para que la lista SOBREVIVA al recargar la pagina
+  // (antes se perdia por completo: la cola solo vivia en memoria).
+  const [playlistQueue, setPlaylistQueue] = useState<Track[]>(() => {
+    try {
+      const raw = localStorage.getItem('serchtube_playlist_queue');
+      const parsed = raw ? JSON.parse(raw) : null;
+      return Array.isArray(parsed) ? parsed.filter((t: any) => t && t.id) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [playlistIndex, setPlaylistIndex] = useState<number>(() => {
+    try {
+      const n = parseInt(localStorage.getItem('serchtube_playlist_index') || '0', 10);
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    } catch (e) {
+      return 0;
+    }
+  });
+
+  // Guarda la cola y el indice ante cualquier cambio (lista persistente)
+  useEffect(() => {
+    try {
+      const hasta = Math.max(200, playlistQueue.length);
+      localStorage.setItem('serchtube_playlist_queue', JSON.stringify(playlistQueue.slice(0, hasta)));
+      localStorage.setItem('serchtube_playlist_index', String(playlistIndex));
+    } catch (e) {}
+  }, [playlistQueue, playlistIndex]);
+
+  // Guarda la ultima cancion reproducida (para restaurarla en pausa al abrir)
+  useEffect(() => {
+    try {
+      if (playerState.currentTrack?.id) {
+        localStorage.setItem('serchtube_last_track', JSON.stringify(playerState.currentTrack));
+      }
+    } catch (e) {}
+  }, [playerState.currentTrack?.id]);
+
+  // Al arrancar: si la cancion restaurada esta en la cola restaurada, el indice
+  // apunta a ella (asi la lista y el "reproduciendo ahora" quedan coherentes).
+  useEffect(() => {
+    const t = playerState.currentTrack;
+    if (!t?.id || playlistQueue.length === 0) return;
+    const idx = playlistQueue.findIndex(q => q.id === t.id);
+    if (idx >= 0 && idx !== playlistIndex) {
+      setPlaylistIndex(idx);
+    }
+    // Solo al montar
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const playlistQueueRef = useRef<Track[]>(playlistQueue);
   playlistQueueRef.current = playlistQueue;
@@ -2860,6 +2915,46 @@ export default function App() {
   }, [playlistIndex, playlistQueue.length, fetchMoreRelatedTracks, playerState.currentTrack]);
 
   // Next / Previous Track handlers navigating the continuous YouTube playlist queue
+  /**
+   * AGREGA canciones al final de la cola (sin repetir) y salta a la primera nueva.
+   * Se usa para ampliar la lista indefinidamente SIN perder las canciones anteriores
+   * ni la lista guardada (antes, al agotarse la cola se lanzaba una busqueda nueva que
+   * reemplazaba todo y reiniciaba el indice).
+   * Devuelve cuantas canciones se agregaron.
+   */
+  const agregarALaCola = (items: Track[]): number => {
+    const colaActual = playlistQueueRef.current;
+    const vistos = new Set(colaActual.map(t => t.id));
+    const claves = new Set(colaActual.map(t => normalizeSongKeyForDedup(t.title)).filter(Boolean));
+    const nuevas: Track[] = [];
+
+    for (const it of (items || [])) {
+      if (!it || !it.id || vistos.has(it.id)) continue;
+      const clave = normalizeSongKeyForDedup(it.title);
+      if (clave && claves.has(clave)) continue;
+      vistos.add(it.id);
+      if (clave) claves.add(clave);
+      nuevas.push({
+        ...it,
+        thumbnail: it.thumbnail || `https://i.ytimg.com/vi/${it.id}/hqdefault.jpg`
+      });
+    }
+
+    if (nuevas.length === 0) return 0;
+
+    const indiceNuevo = colaActual.length;
+    setPlaylistQueue([...colaActual, ...nuevas]);
+    setPlaylistIndex(indiceNuevo);
+    setPlayerState(prev => ({
+      ...prev,
+      currentTrack: nuevas[0],
+      isPlaying: true,
+      currentTime: 0
+    }));
+    enforcePostPlaybackMicSafety();
+    return nuevas.length;
+  };
+
   const handleNextTrack = async () => {
     const currentTrack = playerState.currentTrack;
     if (playlistQueue && playlistQueue.length > 1) {
@@ -2928,14 +3023,30 @@ export default function App() {
       }
     }
 
-    // Query more hits of the same artist or current theme to maintain strict musical continuity
+    // Sin mas canciones en la cola: se AMPLIA agregando al final (nunca se reemplaza,
+    // para no perder las canciones anteriores ni la lista guardada).
     const currentArtist = playerState.currentTrack?.artist || '';
     const currentTitle = playerState.currentTrack?.title || '';
+    let terminoAmpliacion = '';
     if (currentArtist && !currentArtist.toLowerCase().includes('desconocido')) {
-      const cleanArtist = currentArtist.split('ft.')[0].split('feat.')[0].split('&')[0].trim();
-      handleMusicSearch(`${cleanArtist} greatest hits`, true);
+      terminoAmpliacion = `${currentArtist.split('ft.')[0].split('feat.')[0].split('&')[0].trim()} greatest hits`;
     } else if (currentTitle) {
-      handleMusicSearch(`${currentTitle} official music video`, true);
+      terminoAmpliacion = `${currentTitle} official music video`;
+    }
+
+    if (terminoAmpliacion) {
+      try {
+        const resp = await fetch(`/api/youtube/search?q=${encodeURIComponent(terminoAmpliacion)}&isArtist=true`);
+        if (resp.ok) {
+          const data = await resp.json();
+          const items: Track[] = Array.isArray(data?.items) && data.items.length > 0
+            ? data.items
+            : (data?.firstTrack ? [data.firstTrack] : []);
+          if (agregarALaCola(items) > 0) return;
+        }
+      } catch (e) {
+        console.warn('No pude ampliar la cola de reproduccion:', e);
+      }
     }
   };
 
