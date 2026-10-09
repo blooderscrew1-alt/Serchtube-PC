@@ -137,6 +137,11 @@ export interface NeuralSynthesisOptions {
   elvoice?: string;
   /** Directiva de estilo (ver PERSONALITY_TTS_STYLES) */
   style?: string;
+  /**
+   * Actitud general para el motor de Edge ('excited', 'calm', 'soft'…), derivada de
+   * la personalidad del asistente. Se aplica a los tramos sin etiqueta propia.
+   */
+  expr?: string;
   /** Multiplicador de velocidad (ElevenLabs; 1.0 = normal) */
   speed?: number;
   /** Permite abortar una síntesis en curso (p.ej. llegó una orden más nueva) */
@@ -181,6 +186,7 @@ export async function synthesizeNeuralSpeech(text: string, options: NeuralSynthe
   try {
     const params = new URLSearchParams({ text: cleanText, voice, engine });
     if (style) params.set('style', style);
+    if (options.expr) params.set('expr', options.expr);
     if (elvoice) params.set('elvoice', elvoice);
     if (options.speed && options.speed !== 1) params.set('speed', String(options.speed));
 

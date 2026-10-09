@@ -2251,11 +2251,21 @@ async function startServer() {
 
   let lastElevenError = "";
 
-  async function synthesizeWithElevenLabs(text: string, voiceId: string, speed = 1): Promise<{ body: Buffer; contentType: string } | null> {
+  async function synthesizeWithElevenLabs(text: string, voiceId: string, speed = 1, emociones: string[] = []): Promise<{ body: Buffer; contentType: string } | null> {
     if (elevenLabsKeys.length === 0 || !voiceId) return null;
     lastElevenError = "";
     let sawQuota = false;
     let sawVoiceRestriction = false;
+
+    // La actitud de la voz se ajusta segun la etiqueta de expresion recibida
+    const AJUSTES_EMOCION: Record<string, { style: number; stability: number }> = {
+      whispering: { style: 0.35, stability: 0.75 }, soft: { style: 0.3, stability: 0.7 },
+      breathy: { style: 0.5, stability: 0.6 }, excited: { style: 0.75, stability: 0.3 },
+      angry: { style: 0.8, stability: 0.25 }, sad: { style: 0.5, stability: 0.6 },
+      embarrassed: { style: 0.55, stability: 0.5 }, emphasis: { style: 0.6, stability: 0.5 },
+      calm: { style: 0.25, stability: 0.75 }
+    };
+    const actitud = AJUSTES_EMOCION[emociones[0]] || { style: 0.35, stability: 0.5 };
 
     for (let k = 0; k < elevenLabsKeys.length; k++) {
       const keyIdx = (workingElevenIdx + k) % elevenLabsKeys.length;
@@ -2271,7 +2281,7 @@ async function startServer() {
           body: JSON.stringify({
             text,
             model_id: ELEVEN_TTS_MODEL,
-            voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.35, use_speaker_boost: true, speed }
+            voice_settings: { stability: actitud.stability, similarity_boost: 0.75, style: actitud.style, use_speaker_boost: true, speed }
           })
         }), TTS_ELEVEN_ATTEMPT_MS, "ElevenLabs TTS");
         if (!res.ok) {
@@ -2508,8 +2518,111 @@ async function startServer() {
       .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
   }
 
+  // ═══ Etiquetas de expresión en el texto ════════════════════════════════════
+  // "[susurrando] Hola [pausa] ¿qué tal?" — cada motor soporta cosas distintas,
+  // comprobado a mano contra el servicio:
+  //  · Edge (gratis): SOLO acepta <prosody> (rechaza <break>, <emphasis> y
+  //    mstts:express-as con "cerró sin audio"). Las emociones se emulan con
+  //    velocidad/tono/volumen y las pausas con puntuación. Los sonidos (risas,
+  //    suspiros, carraspeo) NO se pueden sintetizar: se quitan.
+  //  · Gemini: las etiquetas se traducen a indicaciones de estilo del prompt.
+  //  · ElevenLabs: se ajusta el estilo/estabilidad de la voz según la emoción.
+  type Expresion = { rate: number; pitch: number; volume: number };
+  const EXPRESIONES: Record<string, Expresion> = {
+    emphasis: { rate: -6, pitch: 2, volume: 12 },
+    soft: { rate: -8, pitch: 0, volume: -24 },
+    whispering: { rate: -15, pitch: -8, volume: -38 },
+    breathy: { rate: -10, pitch: -5, volume: -22 },
+    excited: { rate: 12, pitch: 6, volume: 10 },
+    angry: { rate: 8, pitch: -4, volume: 18 },
+    sad: { rate: -12, pitch: -6, volume: -10 },
+    embarrassed: { rate: -10, pitch: 4, volume: -16 },
+    calm: { rate: -6, pitch: -2, volume: -8 }
+  };
+  // Alias en español de las etiquetas más usadas
+  const ALIAS_EXPRESION: Record<string, string> = {
+    "énfasis": "emphasis", "enfasis": "emphasis", "suave": "soft", "susurrando": "whispering",
+    "susurro": "whispering", "suspirado": "breathy", "emocionado": "excited", "emocionada": "excited",
+    "enojado": "angry", "enojada": "angry", "triste": "sad", "avergonzado": "embarrassed",
+    "avergonzada": "embarrassed", "tranquilo": "calm", "tranquila": "calm"
+  };
+  const ETIQUETAS_PAUSA: Record<string, string> = { pause: ", ", "pausa": ", ", "long pause": ". ", "pausa larga": ". " };
+  const ETIQUETAS_SONIDO = [
+    "laughing", "chuckling", "moaning", "clear throat", "sobbing", "crying loudly", "sighing",
+    "panting", "groaning", "crowd laughing", "background laughter", "audience laughing",
+    "risa", "risas", "suspiro", "sollozo", "carraspeo"
+  ];
+
+  /**
+   * Separa el texto en segmentos según las etiquetas, para que cada tramo se lea
+   * con su propia expresión. Las pausas se convierten en puntuación (el servicio de
+   * Edge no acepta <break>) y los sonidos se quitan.
+   */
+  function interpretarEtiquetas(texto: string): { segmentos: Array<{ texto: string; expr: Expresion | null }>; emociones: string[]; limpio: string } {
+    const segmentos: Array<{ texto: string; expr: Expresion | null }> = [];
+    const emociones: string[] = [];
+    let actual = "";
+    let expr: Expresion | null = null;
+    const cerrar = () => {
+      const t = actual.trim();
+      if (t) segmentos.push({ texto: t, expr });
+      actual = "";
+    };
+    // Se recorren las etiquetas [algo] manteniendo el orden
+    const partes = texto.split(/(\[[^\]]{1,24}\])/g);
+    for (const parte of partes) {
+      const m = /^\[([^\]]{1,24})\]$/.exec(parte);
+      if (!m) { actual += parte; continue; }
+      const bruto = m[1].trim().toLowerCase();
+      const etiqueta = ALIAS_EXPRESION[bruto] || bruto;
+      if (ETIQUETAS_PAUSA[bruto] || ETIQUETAS_PAUSA[etiqueta]) {
+        actual += ETIQUETAS_PAUSA[bruto] || ETIQUETAS_PAUSA[etiqueta];
+        continue;
+      }
+      if (ETIQUETAS_SONIDO.includes(etiqueta)) { actual += ", "; continue; }
+      const encontrada = EXPRESIONES[etiqueta];
+      if (encontrada) {
+        cerrar();
+        expr = encontrada;
+        if (!emociones.includes(etiqueta)) emociones.push(etiqueta);
+        continue;
+      }
+      // Etiqueta desconocida: se quita del texto hablado
+    }
+    cerrar();
+    if (segmentos.length === 0) segmentos.push({ texto: texto.trim(), expr: null });
+    return { segmentos, emociones, limpio: segmentos.map(s => s.texto).join(" ") };
+  }
+
+  /** Construye el SSML de Edge: un <prosody> por segmento (lo único que acepta) */
+  function ssmlEdgeSegmentos(segmentos: Array<{ texto: string; expr: Expresion | null }>, baseRatePct: number, base?: Expresion | null): string {
+    const limitar = (v: number, min: number, max: number) => Math.max(min, Math.min(max, Math.round(v)));
+    return segmentos.map(s => {
+      // La etiqueta del tramo manda; si no hay, se usa la actitud general del asistente
+      const e = s.expr || base || null;
+      const rate = limitar(baseRatePct + (e?.rate || 0), -50, 50);
+      const pitch = limitar(e?.pitch || 0, -30, 30);
+      const volumen = limitar(e?.volume || 0, -50, 50);
+      const signo = (v: number) => (v >= 0 ? "+" : "");
+      return `<prosody rate='${signo(rate)}${rate}%' pitch='${signo(pitch)}${pitch}Hz' volume='${signo(volumen)}${volumen}%'>` +
+        `${xmlSeguro(s.texto)}</prosody>`;
+    }).join("");
+  }
+
+  /** Indicación de estilo para Gemini a partir de las emociones detectadas */
+  function estiloDesdeEtiquetas(emociones: string[]): string {
+    if (emociones.length === 0) return "";
+    const enEspanol: Record<string, string> = {
+      emphasis: "enfatizando las palabras importantes", soft: "con voz suave", whispering: "susurrando",
+      breathy: "con voz aireada", excited: "con mucho entusiasmo", angry: "con tono molesto",
+      sad: "con tono apagado y triste", embarrassed: "con tono tímido", calm: "con tono sereno"
+    };
+    const lista = emociones.map(e => enEspanol[e] || e).join(", ");
+    return ` Al leerlo, hazlo ${lista}.`;
+  }
+
   /** Genera MP3 con las voces neuronales en linea de Edge. null si no se pudo. */
-  async function synthesizeWithEdgeReadAloud(text: string, voice: string, speed = 1): Promise<{ body: Buffer; contentType: string } | null> {
+  async function synthesizeWithEdgeReadAloud(text: string, voice: string, speed = 1, cuerpoSsml?: string): Promise<{ body: Buffer; contentType: string } | null> {
     const voz = /^[a-z]{2}-[A-Z]{2}-\w+Neural$/.test(voice) ? voice : EDGE_TTS_VOICE_DEFAULT;
     const idioma = (voz.match(/^[a-z]{2}-[A-Z]{2}/) || ["es-MX"])[0];
     const url = `${EDGE_TTS_WSS}?TrustedClientToken=${EDGE_TTS_TOKEN}&Sec-MS-GEC=${edgeSecMsGec()}` +
@@ -2546,9 +2659,11 @@ async function startServer() {
           `{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},` +
           `"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}`);
         const porcentaje = Math.max(-50, Math.min(50, Math.round((Number(speed) || 1) - 1) * 100));
+        const cuerpo = cuerpoSsml !== undefined
+          ? cuerpoSsml
+          : `<prosody pitch='+0Hz' rate='${porcentaje >= 0 ? "+" : ""}${porcentaje}%' volume='+0%'>${xmlSeguro(text)}</prosody>`;
         const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${idioma}'>` +
-          `<voice name='${voz}'><prosody pitch='+0Hz' rate='${porcentaje >= 0 ? "+" : ""}${porcentaje}%' volume='+0%'>` +
-          `${xmlSeguro(text)}</prosody></voice></speak>`;
+          `<voice name='${voz}'>${cuerpo}</voice></speak>`;
         ws.send(`X-RequestId:${randomUUID().replace(/-/g, "")}\r\nContent-Type:application/ssml+xml\r\n` +
           `X-Timestamp:${fecha}Z\r\nPath:ssml\r\n\r\n${ssml}`);
       });
@@ -2598,13 +2713,20 @@ async function startServer() {
       const engine = String(req.query.engine || "");           // 'elevenlabs' | 'gemini' | '' (auto)
       const elvoice = String(req.query.elvoice || "");         // voice_id de ElevenLabs
       const edgevoice = String(req.query.edgevoice || "");     // voz neuronal de Edge (gratis)
+      // Etiquetas de expresion en el texto: "[susurrando] Hola [pausa] que tal"
+      const conEtiquetas = /\[[^\]]{1,24}\]/.test(text);
+      const interpretado = interpretarEtiquetas(text);
+      const textoLimpio = conEtiquetas ? interpretado.limpio : text;
+      // Actitud general del asistente (personalidad), ej: 'excited' o 'calm'
+      const exprBase = String(req.query.expr || "").trim().toLowerCase();
+      const expresionBase: Expresion | null = EXPRESIONES[ALIAS_EXPRESION[exprBase] || exprBase] || null;
       const speed = Math.max(0.7, Math.min(1.2, parseFloat(String(req.query.speed || "1")) || 1));
       if (!text) return res.status(400).json({ error: "Falta el parámetro text" });
 
-      const cacheKey = `${engine}|${voice}|${elvoice}|${speed}|${style}|${text}`;
+      const cacheKey = `${engine}|${voice}|${elvoice}|${edgevoice}|${exprBase}|${speed}|${style}|${text}`;
       const cached = ttsAudioCache.get(cacheKey);
       if (cached) {
-        res.set({ "Content-Type": cached.contentType, "X-TTS-Cache": "hit" });
+        res.set({ "Content-Type": cached.contentType, "X-TTS-Cache": "hit", "X-TTS-Ms": String(Date.now() - t0) });
         return res.send(cached.body);
       }
 
@@ -2630,17 +2752,23 @@ async function startServer() {
 
       for (const modelo of orden) {
         if (modelo === 'edge') {
-          // Voz neuronal en linea de Edge: sin clave y sin costo
-          result = await synthesizeWithEdgeReadAloud(text, edgevoice || voice, speed);
+          // Voz neuronal en linea de Edge: sin clave y sin costo. Con etiquetas de
+          // expresion se manda un <prosody> por tramo (lo unico que acepta el servicio).
+          const baseRate = Math.max(-50, Math.min(50, Math.round((speed - 1) * 100)));
+          const cuerpo = (conEtiquetas || expresionBase)
+            ? ssmlEdgeSegmentos(interpretado.segmentos, baseRate, expresionBase)
+            : undefined;
+          result = await synthesizeWithEdgeReadAloud(textoLimpio, edgevoice || voice, speed, cuerpo);
           if (result) { provider = 'edge'; break; }
         } else if (modelo === 'elevenlabs') {
           if (elevenLabsKeys.length === 0 || !elvoice) continue;
-          result = await synthesizeWithElevenLabs(text, elvoice, speed);
+          result = await synthesizeWithElevenLabs(textoLimpio, elvoice, speed, interpretado.emociones);
           if (result) { provider = 'elevenlabs'; break; }
         } else {
           if (geminiTtsKeys.length === 0) continue;
           const restante = Math.max(3000, TTS_GEMINI_BUDGET_MS - (Date.now() - t0));
-          result = await synthesizeWithGemini(text, voice, style, restante);
+          const estiloFinal = (style + estiloDesdeEtiquetas(interpretado.emociones)).trim();
+          result = await synthesizeWithGemini(textoLimpio, voice, estiloFinal, restante);
           if (result) { provider = 'gemini'; break; }
         }
       }
@@ -2658,7 +2786,7 @@ async function startServer() {
       if (!result) {
         // Modo gratuito: no hay ninguna clave configurada. Respaldo Google Translate.
         // Los trozos se piden EN PARALELO: en serie una frase larga tardaba varios segundos.
-        const chunks = splitTextForTts(text);
+        const chunks = splitTextForTts(textoLimpio);
         const partes = await Promise.all(
           chunks.map((chunk) => fetchGoogleTranslateTts(chunk).catch((e) => {
             console.warn("[TTS] Trozo de Google Translate falló:", e?.message);

@@ -1780,6 +1780,19 @@ const SettingsModalComponent: React.FC<SettingsModalProps> = ({
                               Edge: gratis, sin clave ni cuenta. Si el servicio no responde, se usan las voces locales
                               del sistema automáticamente.
                             </p>
+                            <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/25">
+                              <div className="text-[10px] font-semibold text-blue-200 mb-1">
+                                Etiquetas de expresión que puedes escribir en las frases
+                              </div>
+                              <div className="text-[9px] text-blue-100/80 leading-relaxed">
+                                Emociones: <span className="font-mono">[susurrando] [suave] [aireada] [emocionado] [enojado] [triste] [avergonzado] [énfasis] [tranquilo]</span><br />
+                                Pausas: <span className="font-mono">[pausa] [pausa larga]</span><br />
+                                La personalidad del asistente ya aplica una actitud general; la etiqueta manda sobre ella.
+                                Con Edge las emociones se logran con velocidad/tono/volumen (el servicio no acepta estilos
+                                nativos) y los sonidos como <span className="font-mono">[risa]</span> o <span className="font-mono">[suspiro]</span> se
+                                omiten (solo ElevenLabs y Fish Audio los sintetizan).
+                              </div>
+                            </div>
                           </div>
                         )}
                       </div>

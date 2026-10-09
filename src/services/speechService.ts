@@ -47,6 +47,25 @@ export interface SpeechConfig {
   audioInputDeviceId?: string; // ID del dispositivo de micrófono de entrada seleccionado
 }
 
+/**
+ * Actitud de voz (prosodia) segun la personalidad del asistente, para el motor de
+ * Edge: 'excited' acelera y sube el tono, 'calm' lo relaja, 'soft' baja el volumen…
+ * (Valores aceptados por el servidor: emphasis, soft, whispering, breathy, excited,
+ * angry, sad, embarrassed, calm.)
+ */
+export const EXPRESION_POR_PERSONALIDAD: Record<string, string> = {
+  directa: '',
+  animada: 'excited',
+  formal: '',
+  zen: 'calm',
+  conductor: 'excited',
+  jarvis: 'calm',
+  copiloto_rally: 'excited',
+  locutor_fm: 'excited',
+  calida: 'soft',
+  cyberpunk: 'calm'
+};
+
 export function normalizeText(str: string): string {
   if (!str) return '';
   return str
@@ -831,8 +850,9 @@ export class SpeechService {
       blob = await synthesizeNeuralSpeech(sanitized, engine === 'elevenlabs'
         ? { engine: 'elevenlabs', elvoice: this.config.elevenVoice, speed: finalRate, shouldAbort }
         : engine === 'edge'
-          // Voces neuronales EN LINEA de Microsoft Edge: gratis, sin clave ni cuenta
-          ? { engine: 'edge', voice: this.config.edgeVoice || 'es-MX-JorgeNeural', speed: finalRate, shouldAbort }
+          // Voces neuronales EN LINEA de Microsoft Edge: gratis, sin clave ni cuenta.
+          // La personalidad del asistente se traduce a una actitud (prosodia).
+          ? { engine: 'edge', voice: this.config.edgeVoice || 'es-MX-JorgeNeural', speed: finalRate, expr: EXPRESION_POR_PERSONALIDAD[this.config.personality] || '', shouldAbort }
           : { engine: 'gemini', voice, style, shouldAbort }
       );
     } catch (err) {
