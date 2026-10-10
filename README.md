@@ -97,11 +97,42 @@ Mantenimiento de las Releases (cada una pesa ~36 MB entre los dos `.exe`):
 - La URL fija `releases/latest/download/...` siempre apunta a la Release más nueva, así
   que limpiar las viejas no rompe ninguna descarga.
 
+## Búsqueda musical por voz (recuperación escalonada)
+
+El motor `voiceQueryEngine.ts` interpreta lo que se dice por voz antes de buscar:
+
+1. **Analiza la intención**: canción concreta (*«pon X de Y»*), música de un artista,
+   éxitos, género, playlist, mezcla o **fragmento de letra** (*«la que dice…»*), y la
+   variante pedida (remix, en vivo, instrumental, acústica, cover).
+2. **Genera variantes limitadas** (máximo 4-5, sin repetir): petición limpia → variante
+   pedida → recombinación título/artista → intención → corrección de Google → fonética.
+3. **Compara fonéticamente español ↔ inglés** (clave de sonido + esqueleto de
+   consonantes): *jalo ≈ hello*, *kuin ≈ queen*, *mai guerl ≈ my girl*.
+4. **Puntúa cada candidato** con las señales del motor existente **más** las de la
+   petición (título, artista, fonética, género, variante) y elige el mejor candidato que
+   **cumpla lo esencial**, no el que más palabras coincida.
+5. **No reproduce nada al azar**: si no hay coincidencia suficiente, avisa
+   (*«No encontré "X" con suficiente confianza»*) en vez de poner otra canción.
+6. **Corta antes** cuando encuentra una coincidencia de alta confianza y coherente, y
+   reutiliza el resultado si la misma frase se repite en menos de 2,5 s (anti-duplicados).
+
+Diagnóstico: el servidor registra con la etiqueta `[BusquedaVoz]` la transcripción, las
+variantes generadas, los candidatos con su puntuación y el motivo de la elección.
+
+Pruebas de regresión (59 casos, sin red):
+
+```
+npm run prueba-voz
+```
+
+Cubren título+artista correctos, errores fonéticos, artistas extranjeros pronunciados en
+español, títulos parecidos, música de un artista, remix/en vivo, fragmentos de letra,
+reconocimiento incompleto y comandos que no deben buscarse.
+
 Detalles útiles:
 
 - Al ser un `.exe` sin firma digital, Windows puede mostrar *"Windows protegió tu
-  PC"*: hay que pulsar **Más información → Ejecutar de todas formas**.
-- Si algo falla en la host, el instalador deja la traza en
+  PC"*: hay que pulsar **Más información → Ejecutar de todas formas**.- Si algo falla en la host, el instalador deja la traza en
   `%TEMP%\serchtube-install.log`.
 - En la host **no** hace falta Python ni Git.
 - La publicación usa la credencial que Git ya tiene guardada para github.com; si no

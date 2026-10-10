@@ -10,6 +10,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { commandDispatcher, isResumeCommand, ENABLE_SMART_CORRECTION } from "./commandDispatcher.ts";
 import {
   searchYouTubeMusic,
+  searchYouTubeMusicSmart,
   scrapeYouTubeMix,
   scrapeYouTubeVideos,
   cleanSearchQuery,
@@ -1793,12 +1794,71 @@ app.get("/api/google-search", async (req, res) => {
 });
 
 // YouTube Search API proxy - Con Corrector de Palabras de Google y Búsqueda en Google/YouTube
+// Caché anti-duplicados de búsquedas por voz (misma frase en una ventana corta)
+const cacheBusquedasVoz = new Map<string, { at: number; payload: any }>();
+const TTL_BUSQUEDA_VOZ_MS = 2500;
+
 app.get("/api/youtube/search", async (req, res) => {
   const query = (req.query.q as string || "").trim();
   const isArtistOnly = req.query.isArtist === "true";
 
   if (!query) {
     return res.json({ items: [] });
+  }
+
+  // Anti-duplicados: la MISMA frase repetida en menos de 2.5 s devuelve el resultado ya
+  // calculado. Evita que un eco del micrófono o un doble reconocimiento busquen dos veces.
+  const claveCache = `${isArtistOnly ? 'a' : 's'}:${query.toLowerCase()}`;
+  const enCache = cacheBusquedasVoz.get(claveCache);
+  if (enCache && Date.now() - enCache.at < TTL_BUSQUEDA_VOZ_MS) {
+    console.log(`[BúsquedaVoz] ♻️ Consulta repetida (${Date.now() - enCache.at} ms), se reutiliza: "${query}"`);
+    return res.json(enCache.payload);
+  }
+  const responder = (payload: any) => {
+    cacheBusquedasVoz.set(claveCache, { at: Date.now(), payload });
+    if (cacheBusquedasVoz.size > 200) {
+      const primera = cacheBusquedasVoz.keys().next().value;
+      if (primera) cacheBusquedasVoz.delete(primera);
+    }
+    return res.json(payload);
+  };
+
+  try {
+    // ── BÚSQUEDA POR VOZ CON RECUPERACIÓN ESCALONADA ─────────────────────────
+    // Petición limpia -> variantes fonéticas ES<->EN (y corrección de Google como
+    // fuente auxiliar) -> recombinación título/artista. YouTube sigue siendo la
+    // fuente principal de resultados y Google solo propone correcciones.
+    const inteligente = await searchYouTubeMusicSmart(query, isArtistOnly, {
+      corregirConGoogle: (q: string) => correctQueryWithGoogle(q)
+    });
+    if (inteligente.items.length > 0) {
+      return responder({
+        source: inteligente.source,
+        firstTrack: inteligente.firstTrack,
+        items: inteligente.items,
+        intent: inteligente.intent,
+        variantes: inteligente.variantes.map(v => v.texto),
+        confianza: inteligente.confianza
+      });
+    }
+    if (inteligente.source === 'descartado') {
+      // Es un comando de control (pausa, siguiente, volumen…): no se busca nada
+      return responder({ source: 'descartado', items: [], motivo: inteligente.motivo });
+    }
+    if (inteligente.sinConfianza) {
+      // Se buscó de verdad y nada se parecía lo suficiente: mejor avisar que
+      // reproducir una canción distinta.
+      console.warn(`[BúsquedaVoz] Sin coincidencia fiable para "${query}": ${inteligente.motivo}`);
+      return responder({ source: 'sin_coincidencia', items: [], motivo: inteligente.motivo });
+    }
+    if (!inteligente.error) {
+      // Se buscó de verdad y no hay resultados: se informa y NO se recurre a los
+      // respaldos antiguos, que podían fabricar una canción con el texto de la petición.
+      console.warn(`[BúsquedaVoz] Sin resultados para "${query}": ${inteligente.motivo}`);
+      return responder({ source: 'sin_resultados', items: [], motivo: inteligente.motivo });
+    }
+  } catch (err) {
+    console.warn("Búsqueda por voz (recuperación escalonada) falló:", err);
   }
 
   try {

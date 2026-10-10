@@ -1953,7 +1953,16 @@ export default function App() {
           }
         }
       } else {
+        // La búsqueda por voz no encontró nada fiable: se avisa en vez de reproducir
+        // una canción distinta (el servidor devuelve 'sin_coincidencia').
         setSystemStatus('idle');
+        if ((data as any)?.source === 'sin_coincidencia' || (data as any)?.motivo) {
+          const motivo = String((data as any)?.motivo || '').trim();
+          setAssistantResponse(motivo ? `🔍 ${motivo}` : '🔍 No encontré esa canción');
+          setTimeout(() => {
+            setAssistantResponse(prev => (prev && prev.startsWith('🔍') ? null : prev));
+          }, 5000);
+        }
       }
     } catch (err) {
       console.warn("Music search error:", err);

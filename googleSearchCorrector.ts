@@ -13,6 +13,11 @@ import {
   type CatalogTrack
 } from './youtubeEngine.ts';
 import { resolveMusicalContext } from './musicContextEngine.ts';
+import {
+  analizarPeticionVoz,
+  bonificacionContexto,
+  type ContextoPuntuacion
+} from './voiceQueryEngine.ts';
 
 /**
  * Detecta si un video NO es musical (podcasts, gameplays, reviews, tutoriales, películas, noticias)
@@ -159,7 +164,8 @@ export function isEmbedRestrictedChannel(artist?: string, title?: string): boole
 export function scoreCandidateVideo(
   item: CatalogTrack,
   query: string,
-  indexInResults: number = 0
+  indexInResults: number = 0,
+  contexto?: ContextoPuntuacion
 ): number {
   let score = 100 - (indexInResults * 5);
   const title = (item.title || '').toLowerCase();
@@ -181,6 +187,10 @@ export function scoreCandidateVideo(
   }
   if (title.includes(qLower)) {
     score += 20;
+  }
+  // Señales de la petición de voz (título, artista, fonética ES<->EN, género y variante)
+  if (contexto) {
+    score += bonificacionContexto(item, contexto).puntos;
   }
   return score;
 }
@@ -449,10 +459,16 @@ export async function searchGoogleForVideo(
     const candidateList = musicOnlyVideos.length > 0 ? musicOnlyVideos : directVideos;
 
     if (candidateList.length > 0) {
+      // Contexto de la petición de voz (título, artista, fonética ES<->EN, variante)
+      const contextoVoz: ContextoPuntuacion = {
+        intent: analizarPeticionVoz(rawQuery),
+        consultaOriginal: rawQuery,
+        variante: effectiveQuery
+      };
       // Calificar y ordenar candidatos para seleccionar la pista de música exacta
       const scored = candidateList.map((item, idx) => ({
         item,
-        score: scoreCandidateVideo(item, effectiveQuery, idx)
+        score: scoreCandidateVideo(item, effectiveQuery, idx, contextoVoz)
       }));
       scored.sort((a, b) => b.score - a.score);
       const topTrack = scored[0].item;

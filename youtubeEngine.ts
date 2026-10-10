@@ -1,4 +1,15 @@
 import { resolveMusicalContext, isTrackGenreCoherent, type MusicalContext } from './musicContextEngine.ts';
+import {
+  analizarPeticionVoz,
+  generarVariantesConsulta,
+  bonificacionContexto,
+  normalizarBase,
+  similitudFonetica,
+  claveFonetica,
+  claveFoneticaFrase,
+  type PeticionVoz,
+  type ContextoPuntuacion
+} from './voiceQueryEngine.ts';
 
 // =========================================================================
 // YOUTUBE SEARCH & CONTINUOUS PLAYLIST ENGINE (SERCHTUBE MUSIC)
@@ -329,7 +340,8 @@ export function isEmbedRestrictedChannel(artist?: string, title?: string): boole
 export function scoreCandidateVideo(
   item: CatalogTrack,
   query: string,
-  directRankIndex: number = -1
+  directRankIndex: number = -1,
+  contexto?: ContextoPuntuacion
 ): number {
   let score = 0;
   const titleNorm = normalizeText(item.title);
@@ -456,6 +468,13 @@ export function scoreCandidateVideo(
         score -= 900;
       }
     }
+  }
+
+  // 7. Señales de la PETICIÓN DE VOZ (título, artista, fonética ES<->EN, género y
+  //    variante pedida). Se suman a la puntuación propia para que "lo que el usuario
+  //    dijo" pese tanto como la coincidencia literal de palabras.
+  if (contexto) {
+    score += bonificacionContexto(item, contexto).puntos;
   }
 
   return score;
@@ -1030,5 +1049,214 @@ export async function findCompatibleAlternative(
   }
 
   return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BÚSQUEDA POR VOZ CON RECUPERACIÓN ESCALONADA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface BusquedaVozResultado {
+  items: CatalogTrack[];
+  firstTrack?: CatalogTrack;
+  source: string;
+  intent: PeticionVoz;
+  variantes: Array<{ texto: string; origen: string }>;
+  /** 0..1 según la puntuación del candidato elegido */
+  confianza: number;
+  /** Motivos legibles de la selección (o del rechazo) */
+  motivo: string;
+  /** Traza completa para diagnóstico */
+  diagnostico: string[];
+  /** true si la búsqueda en sí falló (red), para que el llamador use su respaldo */
+  error?: boolean;
+  /** true si se encontró algo pero sin confianza suficiente */
+  sinConfianza?: boolean;
+}
+
+/** Umbral a partir del cual se considera buena coincidencia y se cortan las variantes */
+const UMBRAL_ALTA_CONFIANZA = 2100;
+/** Mínimo para aceptar un resultado cuando se pidió una canción concreta */
+const UMBRAL_MINIMO_CANCION = 150;
+
+/**
+ * Busca la canción pedida por voz aplicando una estrategia escalonada:
+ *   1ª) petición original limpiada de comandos
+ *   2ª) variante fonética (español <-> inglés) y corrección de Google (auxiliar)
+ *   3ª) recombinación título/artista o intención (artista/éxitos/género)
+ * y elige el candidato con mejor puntuación. Si no hay coincidencia fiable, devuelve
+ * vacío con el motivo en vez de reproducir algo al azar.
+ *
+ * La corrección de Google se inyecta como parámetro para no crear dependencias
+ * circulares (googleSearchCorrector.ts ya importa este archivo).
+ */
+export async function searchYouTubeMusicSmart(
+  rawQuery: string,
+  isArtistOnly: boolean = false,
+  opciones: {
+    corregirConGoogle?: (q: string) => Promise<{ correctedQuery?: string; source?: string } | null>;
+    maxVariantes?: number;
+  } = {}
+): Promise<BusquedaVozResultado> {
+  const intent = analizarPeticionVoz(rawQuery);
+  const diagnostico: string[] = [];
+  const anotar = (linea: string) => diagnostico.push(linea);
+
+  anotar(`petición="${rawQuery}" | limpia="${intent.limpia}" | tipo=${intent.tipo}` +
+    ` | título="${intent.titulo || ''}" | artista="${intent.artista || ''}"` +
+    ` | género="${intent.genero || ''}" | variante=${intent.variante || 'ninguna'}` +
+    ` | idioma=${intent.idiomaProbable} | confianzaAnálisis=${intent.confianza.toFixed(2)}`);
+
+  if (intent.tipo === 'no_musical') {
+    anotar('descartada: es un comando de control, no una petición musical');
+    console.log('[BusquedaVoz] ' + diagnostico.join('\n[BusquedaVoz] '));
+    return { items: [], source: 'descartado', intent, variantes: [], confianza: 0, motivo: 'Comando de control', diagnostico };
+  }
+
+  const variantes = generarVariantesConsulta(intent, opciones.maxVariantes ?? 4);
+  anotar('variantes generadas: ' + variantes.map(v => `"${v.texto}" (${v.origen})`).join(' | '));
+
+  // Corrección de Google como fuente AUXILIAR (una sola consulta, con su caché interna)
+  if (opciones.corregirConGoogle && variantes.length < (opciones.maxVariantes ?? 4)) {
+    try {
+      const correccion = await opciones.corregirConGoogle(intent.limpia);
+      const texto = (correccion?.correctedQuery || '').trim();
+      if (texto && normalizarBase(texto) !== normalizarBase(intent.limpia)) {
+        const yaExiste = variantes.some(v => normalizarBase(v.texto) === normalizarBase(texto));
+        if (!yaExiste) {
+          variantes.splice(1, 0, { texto, origen: `google:${correccion?.source || 'suggest'}` });
+          anotar(`corrección de Google añadida como variante: "${texto}"`);
+        }
+      } else {
+        anotar('Google no propuso corrección distinta (la petición se conserva)');
+      }
+    } catch (e: any) {
+      anotar(`Google no disponible para corregir: ${e?.message || e}`);
+    }
+  }
+
+  const buscarComoArtista = isArtistOnly || intent.tipo === 'artista' || intent.tipo === 'exitos';
+  // Para GÉNERO/mezcla/playlist NO se usa el modo "solo artista": hay que buscar el
+  // género y no dejar que YouTube invente un artista con el texto de la petición.
+
+  /** ¿El candidato cumple lo esencial que se pidió? (para aceptar con alta confianza) */
+  const cumpleExpectativa = (item: CatalogTrack): boolean => {
+    const tituloItem = normalizarBase(item.title || '');
+    if (intent.genero) return new RegExp(intent.genero, 'i').test(tituloItem);
+    if (intent.titulo) {
+      const tokens = normalizarBase(intent.titulo).split(/\s+/).filter(t => t.length > 1);
+      if (tokens.length === 0) return true;
+      const cubiertos = tokens.filter(t => tituloItem.includes(t) || claveFoneticaFrase(tituloItem).includes(claveFonetica(t))).length;
+      return cubiertos / tokens.length >= 0.5;
+    }
+    if (intent.artista) {
+      const primera = normalizarBase(intent.artista).split(/\s+/)[0];
+      return tituloItem.includes(primera) || normalizarBase(item.artist || '').includes(primera);
+    }
+    return true;
+  };
+
+  const pool: CatalogTrack[] = [];
+  const idsVistos = new Set<string>();
+  const puntuados: Array<{ item: CatalogTrack; puntaje: number; motivo: string; variante: string }> = [];
+  let mejor: { item: CatalogTrack; puntaje: number; motivo: string; variante: string } | null = null;
+  let fuenteBase = '';
+  let fallos = 0;
+  const usadas: Array<{ texto: string; origen: string }> = [];
+
+  for (const variante of variantes) {
+    usadas.push(variante);
+    let resultado: MusicSearchResult | null = null;
+    try {
+      resultado = await searchYouTubeMusic(variante.texto, buscarComoArtista);
+    } catch (e: any) {
+      fallos++;
+      anotar(`variante "${variante.texto}" (${variante.origen}) falló: ${e?.message || e}`);
+      continue;
+    }
+    if (!resultado || !Array.isArray(resultado.items) || resultado.items.length === 0) {
+      anotar(`variante "${variante.texto}" (${variante.origen}): 0 resultados`);
+      continue;
+    }
+    if (!fuenteBase) fuenteBase = resultado.source || 'youtube';
+    anotar(`variante "${variante.texto}" (${variante.origen}): ${resultado.items.length} candidatos`);
+
+    resultado.items.forEach((item, idx) => {
+      if (!item || !item.id) return;
+      if (!idsVistos.has(item.id)) { idsVistos.add(item.id); pool.push(item); }
+      const base = scoreCandidateVideo(item, variante.texto, idx);
+      const ctx = bonificacionContexto(item, {
+        intent,
+        consultaOriginal: intent.original,
+        variante: variante.texto
+      });
+      const total = base + ctx.puntos;
+      anotar(`   #${idx} "${item.title}" [${item.artist}] base=${base} contexto=${ctx.puntos} total=${total}` +
+        (ctx.motivos.length ? ` (${ctx.motivos.join('; ')})` : ''));
+      const evaluado = { item, puntaje: total, motivo: ctx.motivos.join('; ') || 'mejor puntuación', variante: variante.texto };
+      puntuados.push(evaluado);
+      if (!mejor || total > mejor.puntaje) mejor = evaluado;
+    });
+
+    if (mejor && mejor.puntaje >= UMBRAL_ALTA_CONFIANZA && cumpleExpectativa(mejor.item)) {
+      anotar(`corte anticipado: coincidencia de alta confianza y coherente (${mejor.puntaje} >= ${UMBRAL_ALTA_CONFIANZA})`);
+      break;
+    }
+  }
+
+  // Sin resultados: distinguir fallo de red (para permitir el respaldo) de "no existe"
+  if (pool.length === 0) {
+    const fueError = fallos > 0 && fallos === variantes.length;
+    anotar(fueError ? 'todas las variantes fallaron por error de red' : 'ninguna variante devolvió resultados');
+    console.log('[BusquedaVoz] ' + diagnostico.join('\n[BusquedaVoz] '));
+    return {
+      items: [], source: fuenteBase || 'youtube', intent, variantes: usadas,
+      confianza: 0, motivo: fueError ? 'Error de búsqueda' : 'Sin resultados en YouTube',
+      diagnostico, error: fueError
+    };
+  }
+
+  // Umbral: si se pidió una canción concreta y nada se le parece, NO se elige al azar
+  const pidioCancionConcreta = !!intent.titulo && (intent.tipo === 'cancion' || intent.tipo === 'fragmento_letra');
+  if (pidioCancionConcreta && mejor && mejor.puntaje < UMBRAL_MINIMO_CANCION) {
+    anotar(`rechazado: la mejor coincidencia no es fiable (${mejor.puntaje} < ${UMBRAL_MINIMO_CANCION}) ` +
+      `para la canción pedida "${intent.titulo}"`);
+    console.log('[BusquedaVoz] ' + diagnostico.join('\n[BusquedaVoz] '));
+    return {
+      items: [], source: fuenteBase || 'youtube', intent, variantes: usadas,
+      confianza: 0, motivo: `No encontré "${intent.titulo}" con suficiente confianza`,
+      diagnostico, sinConfianza: true
+    };
+  }
+
+  // Se prefiere el candidato que CUMPLE lo esencial (título/artista/género) aunque su
+  // puntuación sea algo menor que la de un resultado con más palabras coincidentes.
+  if (mejor && !cumpleExpectativa(mejor.item)) {
+    const alternativa = puntuados
+      .filter(c => cumpleExpectativa(c.item))
+      .sort((a, b) => b.puntaje - a.puntaje)[0];
+    if (alternativa) {
+      anotar(`preferido "${alternativa.item.title}" (cumple la expectativa) sobre "${mejor.item.title}" (más puntaje pero no coincide)`);
+      mejor = alternativa;
+    }
+  }
+
+  const elegido = mejor!.item;
+  const confianza = Math.max(0, Math.min(1, mejor!.puntaje / 2600));
+  anotar(`ELEGIDO: "${elegido.title}" [${elegido.artist}] (${elegido.id}) puntaje=${mejor!.puntaje}` +
+    ` confianza=${confianza.toFixed(2)} variante="${mejor!.variante}" motivo="${mejor!.motivo}"`);
+  anotar(`candidatos totales evaluados: ${pool.length}`);
+  console.log('[BusquedaVoz] ' + diagnostico.join('\n[BusquedaVoz] '));
+
+  const ordenados = [elegido, ...pool.filter(t => t.id !== elegido.id)];
+  return {
+    items: ordenados,
+    firstTrack: elegido,
+    source: `${fuenteBase || 'youtube'}+voz`,
+    intent,
+    variantes: usadas,
+    confianza,
+    motivo: mejor!.motivo,
+    diagnostico
+  };
 }
 
