@@ -145,26 +145,23 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
     if (!player || !videoId || typeof player.loadVideoById !== 'function') return false;
 
     let tiempo = 0;
-    let estabaSonando = isPlayingIntentRef.current;
     try {
       tiempo = Math.max(0, Math.floor(player.getCurrentTime?.() ?? currentTimeRef.current ?? 0));
-      const estado = player.getPlayerState?.();
-      if (typeof estado === 'number') estabaSonando = (estado === 1 || estado === 3) && isPlayingIntentRef.current;
     } catch (e) {}
 
     try {
-      const opciones = {
+      const estabaSonando = latestPropsRef.current.playerState.isPlaying;
+      player.loadVideoById({
         videoId,
         suggestedQuality: ytSuggestedQuality(calidad),
         startSeconds: tiempo
-      };
-      if (estabaSonando) {
-        player.loadVideoById(opciones);
-      } else if (typeof player.cueVideoById === 'function') {
-        player.cueVideoById(opciones);
-      } else {
-        player.loadVideoById(opciones);
-        player.pauseVideo?.();
+      });
+      if (!estabaSonando) {
+        setTimeout(() => {
+          try {
+            player.pauseVideo?.();
+          } catch (e) {}
+        }, 80);
       }
       lastAppliedQualityRef.current = calidad as VideoQuality;
       currentTimeRef.current = tiempo;
@@ -182,27 +179,22 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
   const calidadInicialAplicadaRef = useRef<boolean>(false);
 
   // Centralized Video Loader - single entry point for all video loading
-  const loadVideo = useCallback((videoId: string, autoPlay: boolean = true) => {
+  const loadVideo = useCallback((videoId: string) => {
     if (!videoId) return;
 
     // Guard: Do not reload if the exact same video is already loaded and active
     if (lastVideoIdRef.current === videoId && isPlayerReadyRef.current && playerRef.current) {
-      if (autoPlay && isPlayingIntentRef.current) {
-        try {
-          const state = playerRef.current.getPlayerState?.();
-          if (state !== 1 && state !== 3) {
-            playerRef.current.playVideo();
-          }
-        } catch (e) {}
-      } else if (!autoPlay) {
-        try {
-          playerRef.current.pauseVideo?.();
-        } catch (e) {}
-      }
+      try {
+        const state = playerRef.current.getPlayerState?.();
+        if (state !== 1 && state !== 3) {
+          playerRef.current.playVideo();
+        }
+      } catch (e) {}
       return;
     }
 
     pendingVideoIdRef.current = videoId;
+    isPlayingIntentRef.current = true;
 
     if (!isPlayerReadyRef.current || !playerRef.current) {
       return;
@@ -210,38 +202,21 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
     try {
       lastVideoIdRef.current = videoId;
-      const opts = {
-        videoId,
-        suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
-        startSeconds: 0
-      };
-
-      if (autoPlay) {
-        if (typeof playerRef.current.loadVideoById === 'function') {
-          playerRef.current.loadVideoById(opts);
-        }
-        enforceUserQuality();
-        setLoadError(null);
-        currentTimeRef.current = 0;
-        lastSecondRef.current = -1;
-        latestPropsRef.current.onStateChange({ isPlaying: true, currentTime: 0 });
-      } else {
-        // Al precargar sin reproducir (inicio de app o reposo), dejar en pausa
-        if (typeof playerRef.current.cueVideoById === 'function') {
-          playerRef.current.cueVideoById(opts);
-        } else if (typeof playerRef.current.loadVideoById === 'function') {
-          playerRef.current.loadVideoById(opts);
-          playerRef.current.pauseVideo?.();
-        }
-        enforceUserQuality();
-        setLoadError(null);
-        currentTimeRef.current = 0;
-        lastSecondRef.current = -1;
-        latestPropsRef.current.onStateChange({ isPlaying: false, currentTime: 0 });
+      if (typeof playerRef.current.loadVideoById === 'function') {
+        playerRef.current.loadVideoById({
+          videoId: videoId,
+          suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
+          startSeconds: 0
+        });
       }
+      enforceUserQuality();
+      setLoadError(null);
+      currentTimeRef.current = 0;
+      lastSecondRef.current = -1;
+      latestPropsRef.current.onStateChange({ isPlaying: true, currentTime: 0 });
     } catch (e) {
       try {
-        if (autoPlay && typeof playerRef.current.loadVideoById === 'function') {
+        if (typeof playerRef.current.loadVideoById === 'function') {
           playerRef.current.loadVideoById({
             videoId: videoId,
             suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
@@ -252,20 +227,9 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
           currentTimeRef.current = 0;
           lastSecondRef.current = -1;
           latestPropsRef.current.onStateChange({ isPlaying: true, currentTime: 0 });
-        } else if (!autoPlay && typeof playerRef.current.cueVideoById === 'function') {
-          playerRef.current.cueVideoById({
-            videoId: videoId,
-            suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
-            startSeconds: 0
-          });
-          enforceUserQuality();
-          setLoadError(null);
-          currentTimeRef.current = 0;
-          lastSecondRef.current = -1;
-          latestPropsRef.current.onStateChange({ isPlaying: false, currentTime: 0 });
         }
       } catch (err) {
-        console.warn('Could not load or cue video:', err);
+        console.warn('Could not load video:', err);
       }
     }
   }, [enforceUserQuality]);
@@ -278,14 +242,16 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
     const targetElement = document.getElementById('yt-player-iframe');
     if (!targetElement) return;
 
-    const initialVideoId = pendingVideoIdRef.current || latestPropsRef.current.track?.id || null;
+    // Siempre garantizar un videoId válido para que el iframe API no falle con "Video no disponible"
+    const fallbackCatalogId = "fJ9rUzIMcZQ";
+    const initialVideoId = pendingVideoIdRef.current || latestPropsRef.current.track?.id || fallbackCatalogId;
     lastVideoIdRef.current = initialVideoId;
 
-    // Solo activar autoplay si el usuario tiene intención explícita de reproducir y el estado es isPlaying
-    const shouldAutoplay = Boolean(initialVideoId && isPlayingIntentRef.current && latestPropsRef.current.playerState.isPlaying);
+    // Autoplay solo si el estado actual pide reproducir (por defecto en inicio es false)
+    const shouldAutoplay = Boolean(latestPropsRef.current.playerState.isPlaying);
 
     const playerConfig: any = {
-      ...(initialVideoId ? { videoId: initialVideoId } : {}),
+      videoId: initialVideoId,
       playerVars: {
         autoplay: shouldAutoplay ? 1 : 0,
         controls: 1,
@@ -320,24 +286,22 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
             } catch (e) {}
           }
 
-          // Initial quality enforcement: la API ya no acepta la calidad en el
-          // constructor, asi que si hay una preferencia guardada (no 'auto') se
-          // aplica con una recarga suave en el segundo 0.
+          // Initial quality enforcement
           enforceUserQuality(event.target);
-          if (desiredQualityRef.current && desiredQualityRef.current !== 'auto' && !calidadInicialAplicadaRef.current) {
+          if (desiredQualityRef.current && desiredQualityRef.current !== 'auto' && !calidadInicialAplicadaRef.current && currentProps.playerState.isPlaying) {
             calidadInicialAplicadaRef.current = true;
             aplicarCalidadReal(desiredQualityRef.current);
           }
 
-          // If there was a pending track waiting for player initialization
+          // Si hay una canción pendiente diferente a la inicial, cargarla
           if (pendingVideoIdRef.current && pendingVideoIdRef.current !== initialVideoId) {
-            loadVideo(pendingVideoIdRef.current, isPlayingIntentRef.current);
-          } else if (isPlayingIntentRef.current && initialVideoId) {
+            loadVideo(pendingVideoIdRef.current);
+          } else if (currentProps.playerState.isPlaying) {
             try {
               event.target.playVideo();
             } catch (e) {}
-          } else if (!isPlayingIntentRef.current && initialVideoId) {
-            // Al arrancar la aplicación sin solicitud previa: asegurar que el video quede en pausa
+          } else {
+            // Al arrancar la aplicación sin solicitud previa: asegurar que el video quede en pausa/reposo
             try {
               event.target.pauseVideo?.();
             } catch (e) {}
@@ -346,16 +310,6 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
         onStateChange: (event: any) => {
           // YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 video cued
           if (event.data === 1) {
-            // Protección contra autoreproducción no solicitada al iniciar la aplicación
-            if (!isPlayingIntentRef.current) {
-              console.log('[YouTube Player] 🛑 Reproducción no solicitada al iniciar la app. Pausando video.');
-              try {
-                event.target.pauseVideo?.();
-              } catch (e) {}
-              latestPropsRef.current.onStateChange({ isPlaying: false });
-              return;
-            }
-
             // Actively playing
             youtubeAuthService.recordPlaybackSuccess();
             isPlayingIntentRef.current = true;
@@ -373,9 +327,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
             enforceUserQuality();
           } else if (event.data === 2) {
             // Paused naturally
-            if (!isPlayingIntentRef.current) {
-              latestPropsRef.current.onStateChange({ isPlaying: false });
-            }
+            latestPropsRef.current.onStateChange({ isPlaying: false });
           } else if (event.data === 0) {
             // Track ended naturally
             latestPropsRef.current.onTrackEnded();
@@ -410,6 +362,11 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
           const currentTrack = latestPropsRef.current.track;
           const currentId = currentTrack?.id || lastVideoIdRef.current || '';
+
+          // Si el reproductor está en reposo al inicio y no hay canción solicitada, ignorar errores espurios de iframe
+          if (!currentTrack && !latestPropsRef.current.playerState.isPlaying) {
+            return;
+          }
 
           if (currentId) {
             failedVideoIdsRef.current.add(currentId);
@@ -590,14 +547,11 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
     if (isInitialMountRef.current) {
       isInitialMountRef.current = false;
-      // Al iniciar SerchTube: si no se ha pedido reproducir (isPlaying === false, canción restaurada de la sesión previa),
-      // NO iniciar reproducción automáticamente: precargarla en pausa (cue) lista para cuando el usuario lo pida.
+      // Al iniciar SerchTube: si playerState.isPlaying es false (restaurado de sesión previa en pausa),
+      // NO arrancar la reproducción automáticamente: guardar referencia y no llamar a loadVideo()
       if (!latestPropsRef.current.playerState.isPlaying) {
         pendingVideoIdRef.current = track.id;
-        isPlayingIntentRef.current = false;
-        if (isPlayerReadyRef.current && playerRef.current) {
-          loadVideo(track.id, false);
-        }
+        lastVideoIdRef.current = track.id;
         return;
       }
     }
@@ -606,7 +560,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
     isPlayingIntentRef.current = true;
 
     if (isPlayerReadyRef.current && playerRef.current) {
-      loadVideo(track.id, true);
+      loadVideo(track.id);
     }
   }, [track?.id, loadVideo]);
 
@@ -724,25 +678,8 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       setLoadError(null);
       isRecoveringRef.current = false;
       failedVideoIdsRef.current.clear();
-      if (currentId && playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
-        try {
-          const opts = {
-            videoId: currentId,
-            suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
-            startSeconds: Math.max(0, currentTimeRef.current)
-          };
-          if (isPlayingIntentRef.current) {
-            playerRef.current.loadVideoById(opts);
-            playerRef.current.playVideo?.();
-          } else if (typeof playerRef.current.cueVideoById === 'function') {
-            playerRef.current.cueVideoById(opts);
-          } else {
-            playerRef.current.loadVideoById(opts);
-            playerRef.current.pauseVideo?.();
-          }
-        } catch (e) {
-          console.warn('Could not reload video:', e);
-        }
+      if (currentId && isPlayerReadyRef.current && playerRef.current) {
+        loadVideo(currentId);
       }
     };
 
