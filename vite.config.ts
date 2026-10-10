@@ -66,8 +66,11 @@ export default defineConfig(() => {
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
+      // OJO: "build/**" también se ignora. El empaquetador portable descomprime ahí
+      // Node.js (~89 MB, miles de archivos) para la variante -ConNode, y el vigilante
+      // de Vite se colgaba (EBUSY) y se llevaba el servidor por delante.
       watch: process.env.DISABLE_HMR === 'true' ? null : {
-        ignored: ['**/dev-dist/**', '**/node_modules/**']
+        ignored: ['**/dev-dist/**', '**/node_modules/**', '**/build/**', '**/dist/**', '**/.git/**']
       },
     },
   };
