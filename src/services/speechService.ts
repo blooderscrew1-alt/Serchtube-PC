@@ -472,6 +472,8 @@ export class SpeechService {
           // la escucha continúa aunque el saludo del TTS siga sonando.
           const isTtsActive =
             this.isSynthesizing ||
+            this.browserUtteranceActive ||
+            (this.neuralAudioEl && !this.neuralAudioEl.paused && !this.neuralAudioEl.ended) ||
             (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.speaking) ||
             now < this.ttsGuardUntil;
 
@@ -576,7 +578,8 @@ export class SpeechService {
                 if (attempts < 3) setTimeout(tryRestart, 250 * attempts);
               }
             };
-            setTimeout(tryRestart, 250);
+            const waitMs = Math.max(250, this.ttsGuardUntil > Date.now() ? (this.ttsGuardUntil - Date.now() + 150) : 250);
+            setTimeout(tryRestart, waitMs);
           } else if (!this.isProcessingCommand) {
             this.onStatusChangeCallback?.('idle');
           }
@@ -650,6 +653,7 @@ export class SpeechService {
 
   public resetSession() {
     this.finalTail = '';
+    this.awaitingCommand = false;
     if (this.recognition) {
       try {
         this.recognition.abort();
@@ -888,7 +892,7 @@ export class SpeechService {
         clearTimeout(watchdog);
         this.isSynthesizing = false;
         this.lastSpokenTimestamp = Date.now();
-        this.ttsGuardUntil = Date.now() + 900; // 900ms de decaimiento de eco acústico
+        this.ttsGuardUntil = Date.now() + 2200; // 2200ms de decaimiento de eco acústico post-locución
         if (this.config.duckingEnabled) {
           AudioEngine.getInstance().stopDucking();
         }
@@ -1116,7 +1120,7 @@ export class SpeechService {
         this.isSynthesizing = false;
         this.browserUtteranceActive = false;
         this.lastSpokenTimestamp = Date.now();
-        this.ttsGuardUntil = Date.now() + 900; // 900ms acoustic echo decay buffer
+        this.ttsGuardUntil = Date.now() + 2200; // 2200ms acoustic echo decay buffer post-speech
         // Se cancela para CURAR el estado del navegador si se quedó colgado
         try {
           if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {

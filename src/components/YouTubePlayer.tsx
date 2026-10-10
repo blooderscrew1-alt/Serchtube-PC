@@ -151,11 +151,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
     try {
       const estabaSonando = latestPropsRef.current.playerState.isPlaying;
-      player.loadVideoById({
-        videoId,
-        suggestedQuality: ytSuggestedQuality(calidad),
-        startSeconds: tiempo
-      });
+      player.loadVideoById(videoId, tiempo);
       if (!estabaSonando) {
         setTimeout(() => {
           try {
@@ -203,11 +199,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
     try {
       lastVideoIdRef.current = videoId;
       if (typeof playerRef.current.loadVideoById === 'function') {
-        playerRef.current.loadVideoById({
-          videoId: videoId,
-          suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
-          startSeconds: 0
-        });
+        playerRef.current.loadVideoById(videoId, 0);
       }
       enforceUserQuality();
       setLoadError(null);
@@ -217,11 +209,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
     } catch (e) {
       try {
         if (typeof playerRef.current.loadVideoById === 'function') {
-          playerRef.current.loadVideoById({
-            videoId: videoId,
-            suggestedQuality: ytSuggestedQuality(desiredQualityRef.current),
-            startSeconds: 0
-          });
+          playerRef.current.loadVideoById(videoId, 0);
           enforceUserQuality();
           setLoadError(null);
           currentTimeRef.current = 0;
@@ -242,16 +230,16 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
     const targetElement = document.getElementById('yt-player-iframe');
     if (!targetElement) return;
 
-    // Siempre garantizar un videoId válido para que el iframe API no falle con "Video no disponible"
-    const fallbackCatalogId = "fJ9rUzIMcZQ";
-    const initialVideoId = pendingVideoIdRef.current || latestPropsRef.current.track?.id || fallbackCatalogId;
+    // Solo cargar video inicial si hay una canción activa solicitada o restaurada;
+    // si no hay canción, el reproductor debe quedar limpio en reposo SIN reproducir nada.
+    const initialVideoId = pendingVideoIdRef.current || latestPropsRef.current.track?.id || null;
     lastVideoIdRef.current = initialVideoId;
 
     // Autoplay solo si el estado actual pide reproducir (por defecto en inicio es false)
-    const shouldAutoplay = Boolean(latestPropsRef.current.playerState.isPlaying);
+    const shouldAutoplay = Boolean(latestPropsRef.current.playerState.isPlaying && initialVideoId);
 
     const playerConfig: any = {
-      videoId: initialVideoId,
+      ...(initialVideoId ? { videoId: initialVideoId } : {}),
       playerVars: {
         autoplay: shouldAutoplay ? 1 : 0,
         controls: 1,
@@ -276,7 +264,9 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
             : currentProps.isDucked
             ? Math.round(rawVolume100 * 0.2)
             : rawVolume100;
-          event.target.setVolume(effectiveVol);
+          try {
+            event.target.setVolume?.(effectiveVol);
+          } catch (e) {}
 
           // Initial playback rate
           if (currentProps.playerState.playbackSpeed && currentProps.playerState.playbackSpeed !== 1.0 && typeof event.target.setPlaybackRate === 'function') {
@@ -288,20 +278,18 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
           // Initial quality enforcement
           enforceUserQuality(event.target);
-          if (desiredQualityRef.current && desiredQualityRef.current !== 'auto' && !calidadInicialAplicadaRef.current && currentProps.playerState.isPlaying) {
-            calidadInicialAplicadaRef.current = true;
-            aplicarCalidadReal(desiredQualityRef.current);
-          }
 
-          // Si hay una canción pendiente diferente a la inicial, cargarla
-          if (pendingVideoIdRef.current && pendingVideoIdRef.current !== initialVideoId) {
-            loadVideo(pendingVideoIdRef.current);
-          } else if (currentProps.playerState.isPlaying) {
-            try {
-              event.target.playVideo();
-            } catch (e) {}
-          } else {
-            // Al arrancar la aplicación sin solicitud previa: asegurar que el video quede en pausa/reposo
+          // Si hay una canción pendiente y el usuario pidió reproducir
+          if (pendingVideoIdRef.current) {
+            if (currentProps.playerState.isPlaying) {
+              loadVideo(pendingVideoIdRef.current);
+            } else if (typeof event.target.cueVideoById === 'function') {
+              try {
+                event.target.cueVideoById(pendingVideoIdRef.current, 0);
+              } catch (e) {}
+            }
+          } else if (!currentProps.playerState.isPlaying) {
+            // Sin canción o en reposo: asegurar pausa estricta
             try {
               event.target.pauseVideo?.();
             } catch (e) {}
@@ -310,6 +298,16 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
         onStateChange: (event: any) => {
           // YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 video cued
           if (event.data === 1) {
+            // Protección contra reproducción no deseada al iniciar la aplicación:
+            // Si el usuario no ha pedido reproducir, pausar inmediatamente y no activar isPlaying
+            if (!isPlayingIntentRef.current) {
+              try {
+                event.target.pauseVideo?.();
+              } catch (e) {}
+              latestPropsRef.current.onStateChange({ isPlaying: false });
+              return;
+            }
+
             // Actively playing
             youtubeAuthService.recordPlaybackSuccess();
             isPlayingIntentRef.current = true;
@@ -327,6 +325,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
             enforceUserQuality();
           } else if (event.data === 2) {
             // Paused naturally
+            isPlayingIntentRef.current = false;
             latestPropsRef.current.onStateChange({ isPlaying: false });
           } else if (event.data === 0) {
             // Track ended naturally
@@ -334,10 +333,6 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
           }
         },
         onPlaybackQualityChange: (event: any) => {
-          // Solo se informa la calidad REAL observada. La preferencia del usuario
-          // (playerState.playbackQuality) NO se toca aqui: antes se sobrescribia con
-          // lo que reportaba YouTube (p. ej. 144p al recargar o en segundo plano) y el
-          // panel mostraba una calidad distinta a la elegida.
           const observada = String(event.data || '');
           if (observada) {
             latestPropsRef.current.onStateChange({ actualQuality: observada });
@@ -363,8 +358,8 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
           const currentTrack = latestPropsRef.current.track;
           const currentId = currentTrack?.id || lastVideoIdRef.current || '';
 
-          // Si el reproductor está en reposo al inicio y no hay canción solicitada, ignorar errores espurios de iframe
-          if (!currentTrack && !latestPropsRef.current.playerState.isPlaying) {
+          // Si el reproductor está en reposo o no hay canción solicitada/intención de reproducir, ignorar errores espurios
+          if (!currentTrack || !isPlayingIntentRef.current) {
             return;
           }
 
@@ -375,8 +370,8 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
           if (isRecoveringRef.current) return;
           isRecoveringRef.current = true;
 
-          // Error codes 101/150 = Embedding not allowed by video owner; 100 = Video removed/private; 2/5 = Invalid param/HTML5 error
-          const isEmbedRestriction = errorCode === 101 || errorCode === 150;
+          // Error codes 101/150 = Embedding not allowed by video owner; 100 = Video removed/private; 2/5 = Invalid param/HTML5 error; 153 = Config error
+          const isEmbedRestriction = errorCode === 101 || errorCode === 150 || errorCode === 153;
           youtubeAuthService.recordPlaybackError(errorCode, isEmbedRestriction);
           const songName = currentTrack?.title ? `"${currentTrack.title}"` : 'la canción';
           const errMsg = isEmbedRestriction
@@ -552,6 +547,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       if (!latestPropsRef.current.playerState.isPlaying) {
         pendingVideoIdRef.current = track.id;
         lastVideoIdRef.current = track.id;
+        isPlayingIntentRef.current = false;
         return;
       }
     }

@@ -773,6 +773,11 @@ function parseVolumeNumber(raw: string): number | null {
     !CONTROL_ACTIONS.has(lowerAction) ? originalAction : ''
   );
 
+  // Verificación estricta: Si el texto sigue conteniendo intenciones de pausa o eco, NUNCA buscar en YouTube
+  if (/(?:pausa|pausar|pausado|pausando|detener|detén|deten|parar|para|alto|stop|en pausa|reproducci[oó]n en pausa|aqu[ií] te espero|pausa lista|silenciador)/i.test(searchCandidate)) {
+    return { intent: 'PAUSE', originalAction: originalAction || 'pause', rawText };
+  }
+
   // Verificación estricta: Si el texto sigue conteniendo intenciones de volumen, NUNCA buscar en YouTube
   if (/(?:volumen|decibelios|s[uú]bele|b[aá]jale)/i.test(searchCandidate)) {
     return { intent: 'VOLUME_UP', originalAction: originalAction || 'volume_up', rawText };

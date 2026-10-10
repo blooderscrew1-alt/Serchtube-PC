@@ -29,6 +29,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Origin, Accept");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
@@ -1454,6 +1455,15 @@ function parseVoiceCommandLocally(transcript: string, personality: string, curre
     .replace(/^(por favor\s+)?(oye serch\s+)?(serch\s+)?(música\s+|musica\s+)?(pon|reproduce|escuchar|buscar|reproducir|toca|quiero escuchar|play|ponme|ponte)\s+(a\s+|de\s+|la canción\s+|el tema\s+|el disco\s+|algo de\s+)?/i, '')
     .replace(/^(por favor\s+)?(oye serch\s+)?(serch\s+)?(música\s+|musica\s+)/i, '')
     .trim();
+
+  // Verificación estricta: Si el texto menciona pausa o eco de respuesta, NUNCA buscar canción
+  if (/(?:pausa|pausar|pausado|pausando|detener|detén|deten|parar|para|alto|stop|en pausa|reproducci[oó]n en pausa|aqu[ií] te espero|pausa lista|silenciador)/i.test(text) ||
+      /(?:pausa|pausar|pausado|pausando|detener|parar|en pausa)/i.test(searchTarget)) {
+    return {
+      action: 'pause',
+      speechFeedback: getDynamicFeedback('pause')
+    };
+  }
 
   // Verificación estricta: Si el texto remanente menciona volumen o audio, NUNCA buscar canción
   if (/(?:volumen|decibelios|s[uú]bele|b[aá]jale)/i.test(searchTarget)) {

@@ -157,30 +157,48 @@ export function getEnthusiasticFeedback(
     },
     pause: {
       animada: [
-        `¡Pausa al canto! Respira hondo que enseguida volvemos a la carga.`,
-        `¡Frenazo sonoro! Aquí te guardo el sitio, avisa cuando quieras marcha.`,
-        `¡Pista congelada! No te vayas lejos, que la fiesta sigue cuando digas.`,
-        `¡Pausa técnica de campeonato! Descanso merecido para los tímpanos.`,
-        `¡Silenciador al canto! Quédate tranquilo que aquí te espero con las pilas puestas.`,
-        `¡Paramos un segundito! Aprovecha para tomar aire o contar un chiste.`
+        `¡Pausado! Aquí te espero.`,
+        `¡Pausa al canto! En espera.`,
+        `¡Reproducción en pausa!`,
+        `¡Pausa lista, avísame cuando sigamos!`
       ],
       directa: [
-        `¡Pausado! Pista en espera.`,
-        `Pausa lista, aquí te espero.`,
+        `¡Pausado!`,
+        `Pausa lista.`,
         `Reproducción en pausa.`
       ],
       calida: [
-        `Pausando ${cleanTarget} con gusto, tómate todo el tiempo que necesites.`,
-        `Pista en pausa para ti, aquí te espero con una sonrisa.`,
-        `Pausadito, avísame cuando quieras volver a escucharla.`
+        `Pausado con gusto, tómate tu tiempo.`,
+        `Pista en pausa para ti.`,
+        `Pausado, aquí te espero con agrado.`
       ],
       copiloto_rally: [
-        `¡Freno de mano puesto! ¡Parada técnica de audio en boxes!`,
-        `¡Bandera amarilla! Audio en pausa en cabina.`
+        `¡Pausa en cabina!`,
+        `¡Audio en pausa!`
       ],
       locutor_fm: [
-        `¡Hacemos una breve pausa publicitaria imaginaria con ${cleanTarget}!`,
-        `¡Pausa en las ondas de SerchTube, enseguida volvemos!`
+        `¡Pausa en las ondas de SerchTube!`,
+        `¡Pausa en cabina de emisión!`
+      ],
+      formal: [
+        `Reproducción pausada correctamente.`,
+        `Pausa establecida con gusto.`
+      ],
+      zen: [
+        `Pausa en serenidad.`,
+        `Audio en pausa armónica.`
+      ],
+      conductor: [
+        `Pausado en carretera.`,
+        `Audio en pausa al volante.`
+      ],
+      jarvis: [
+        `Reproducción pausada, señor.`,
+        `Sistema en pausa.`
+      ],
+      cyberpunk: [
+        `Canal en pausa.`,
+        `Reproducción congelada en memoria.`
       ]
     },
     resume: {

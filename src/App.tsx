@@ -595,10 +595,15 @@ export default function App() {
       clearTimeout(activeListeningTimerRef.current);
       activeListeningTimerRef.current = null;
     }
+    if (pendingGreetingTimerRef.current) {
+      clearTimeout(pendingGreetingTimerRef.current);
+      pendingGreetingTimerRef.current = null;
+    }
     AudioEngine.getInstance().stopDucking();
-    SpeechService.getInstance().setCommandCooldown(3000);
-    playbackCooldownUntilRef.current = Date.now() + 3000;
-    turnLockUntilRef.current = Date.now() + 3000;
+    SpeechService.getInstance().setAwaitingCommand(false);
+    SpeechService.getInstance().setCommandCooldown(4500);
+    playbackCooldownUntilRef.current = Date.now() + 4500;
+    turnLockUntilRef.current = Date.now() + 4500;
     isTurnBusyRef.current = false;
     SpeechService.getInstance().resetSession();
   }, []);
@@ -1322,6 +1327,7 @@ export default function App() {
           setIsScreensaverActive(false);
           setIsAwaitingCommandAfterWakeWord(true);
           isAwaitingCommandRef.current = true;
+          SpeechService.getInstance().setAwaitingCommand(true);
           setMicActivationSource('host');
           setSystemStatus('listening');
           setIsListening(true);
@@ -1348,9 +1354,10 @@ export default function App() {
           return;
         }
 
-        // Palabra clave desactivada, o ya estamos en el flujo activo de escucha.
-        // (Si la frase traía la palabra clave, se conserva el texto del comando ya puesto.)
-        if (!traePalabraClave && !isAwaiting && !isDirectActive) {
+        // Mostrar en tiempo real la transcripción en pantalla bajo el orbe:
+        if (traePalabraClave && parsed?.commandText) {
+          setLastTranscript(parsed.commandText);
+        } else if (isAwaiting || isDirectActive || !wakeEnabled) {
           setLastTranscript(transcript);
         }
 
@@ -1380,6 +1387,7 @@ export default function App() {
 
         // Direct Push-To-Talk Handling (User tapped the microphone button)
         if (isDirectMicActiveRef.current) {
+          setLastTranscript(transcript);
           if (!isFinal) {
             // Keep timer alive while user is actively talking
             if (activeListeningTimerRef.current) clearTimeout(activeListeningTimerRef.current);
@@ -1404,6 +1412,7 @@ export default function App() {
           setIsAwaitingCommandAfterWakeWord(false);
           isAwaitingCommandRef.current = false;
           setSystemStatus('processing');
+          setLastTranscript(transcript);
           // Un comando real llegó: cancelar cualquier saludo de bienvenida pendiente
           if (pendingGreetingTimerRef.current) { clearTimeout(pendingGreetingTimerRef.current); pendingGreetingTimerRef.current = null; }
           SpeechService.getInstance().setCommandCooldown(3000);
@@ -1422,6 +1431,7 @@ export default function App() {
         if (!isFinal) {
           // While user is actively speaking interim words after wake word, refresh the 5-second inactivity timeout!
           if (wakeEnabled && isAwaitingCommandRef.current) {
+            setLastTranscript(transcript);
             if (activeListeningTimerRef.current) clearTimeout(activeListeningTimerRef.current);
             activeListeningTimerRef.current = setTimeout(() => {
               setIsAwaitingCommandAfterWakeWord(false);
@@ -1450,6 +1460,7 @@ export default function App() {
               setIsScreensaverActive(false);
               setIsAwaitingCommandAfterWakeWord(true);
               isAwaitingCommandRef.current = true;
+              SpeechService.getInstance().setAwaitingCommand(true);
               setMicActivationSource('host');
               setSystemStatus('listening');
               setIsListening(true);
@@ -1495,6 +1506,7 @@ export default function App() {
               setIsAwaitingCommandAfterWakeWord(false);
               isAwaitingCommandRef.current = false;
               setSystemStatus('processing');
+              setLastTranscript(parsed.commandText);
               SpeechService.getInstance().setCommandCooldown(3000);
               playbackCooldownUntilRef.current = Date.now() + 3000;
               SpeechService.getInstance().resetSession(); // CLOSE PETITION & RESET AUDIO BUFFER IMMEDIATELY!
@@ -1513,6 +1525,7 @@ export default function App() {
             setIsAwaitingCommandAfterWakeWord(false);
             isAwaitingCommandRef.current = false;
             setSystemStatus('processing');
+            setLastTranscript(transcript);
             SpeechService.getInstance().setCommandCooldown(3000);
             playbackCooldownUntilRef.current = Date.now() + 3000;
             SpeechService.getInstance().resetSession(); // CLOSE PETITION & RESET AUDIO BUFFER IMMEDIATELY!
@@ -1528,6 +1541,7 @@ export default function App() {
           }
         } else {
           // Wake word disabled -> Process all speech directly
+          setLastTranscript(transcript);
           // Un comando real llegó: cancelar cualquier saludo de bienvenida pendiente
           if (pendingGreetingTimerRef.current) { clearTimeout(pendingGreetingTimerRef.current); pendingGreetingTimerRef.current = null; }
           SpeechService.getInstance().setCommandCooldown(3000);
@@ -2458,6 +2472,12 @@ export default function App() {
 
     switch (action) {
       case 'play': {
+        // Absolute safeguard against pause commands or echoes being treated as songs
+        if (/(?:pausa|pausar|pausado|pausando|detener|detén|deten|parar|para|alto|stop|en pausa|reproducci[oó]n en pausa|aqu[ií] te espero|pausa lista)/i.test(query)) {
+          setPlayerState(prev => ({ ...prev, isPlaying: false }));
+          enforcePostPlaybackMicSafety();
+          break;
+        }
         // Absolute safeguard against volume commands being treated as songs
         if (/(?:volumen|sonido|audio|decibelios|s[uú]bele|b[aá]jale)/i.test(query)) {
           setPlayerState(prev => ({ ...prev, volume: Math.min(15, prev.volume + 1), isMuted: false }));
@@ -2479,6 +2499,11 @@ export default function App() {
 
       case 'search': {
         if (query) {
+          if (/(?:pausa|pausar|pausado|pausando|detener|detén|deten|parar|para|alto|stop|en pausa|reproducci[oó]n en pausa)/i.test(query)) {
+            setPlayerState(prev => ({ ...prev, isPlaying: false }));
+            enforcePostPlaybackMicSafety();
+            break;
+          }
           if (/(?:volumen|sonido|audio|decibelios|s[uú]bele|b[aá]jale)/i.test(query)) {
             break;
           }
@@ -2500,6 +2525,11 @@ export default function App() {
         break;
 
       case 'play_track':
+        if (/(?:pausa|pausar|pausado|pausando|detener|detén|deten|parar|para|alto|stop|en pausa|reproducci[oó]n en pausa|aqu[ií] te espero|pausa lista)/i.test(query)) {
+          setPlayerState(prev => ({ ...prev, isPlaying: false }));
+          enforcePostPlaybackMicSafety();
+          break;
+        }
         if (query && !isPureResumePhrase(query)) {
           if (/(?:volumen|sonido|audio|decibelios|s[uú]bele|b[aá]jale)/i.test(query)) {
             break;
