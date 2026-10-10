@@ -79,6 +79,21 @@ if (Test-Path -LiteralPath $exeChico) { $adjuntos += $exeChico }
 if (-not $SinVarianteNode -and (Test-Path -LiteralPath $exeNode)) { $adjuntos += $exeNode }
 if ($adjuntos.Count -eq 0) { Mal "No hay ningun .exe para publicar en $salida"; exit 1 }
 
+# --- Paquete del SERVIDOR YA COMPILADO (dist) --------------------------------
+# Permite que una PC host sin Git y sin herramientas de compilacion se actualice con
+# un solo .bat: el lanzador ejecuta dist\server.cjs y el modo ZIP no compila, asi que
+# sin este adjunto los cambios del servidor no llegarian a la host.
+$zipServidor = Join-Path $salida 'SerchTube-servidor.zip'
+$distDir = Join-Path $Raiz 'dist'
+if (Test-Path -LiteralPath (Join-Path $distDir 'server.cjs')) {
+  Remove-Item -LiteralPath $zipServidor -Force -ErrorAction SilentlyContinue
+  Compress-Archive -Path $distDir -DestinationPath $zipServidor -CompressionLevel Optimal -Force
+  $adjuntos += $zipServidor
+  Paso "Paquete del servidor: $([math]::Round((Get-Item $zipServidor).Length/1MB,2)) MB"
+} else {
+  Aviso "No hay dist\server.cjs: la Release no llevara el paquete del servidor."
+}
+
 if ($SinVarianteNode) {
   Aviso "Publicando SIN la variante con Node."
   Aviso "OJO: la Release mas nueva pasara a ser 'latest' y la URL"
