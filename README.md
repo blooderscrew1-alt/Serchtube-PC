@@ -88,6 +88,15 @@ Generarlos y publicarlos (en la PC de desarrollo, después de cada cambio):
     descarga Node LTS ~30 MB y lo deja cacheado en `build\cache\`)
   - o `npm run portable` (con `-- -ConNode` para la variante grande)
 
+Mantenimiento de las Releases (cada una pesa ~36 MB entre los dos `.exe`):
+
+- `scripts\limpiar-releases.ps1` conserva las N más recientes y borra las anteriores
+  (con sus etiquetas). Sin `-Confirmar` solo muestra lo que haría:
+  - `... -Conservar 5` → simulación
+  - `... -Conservar 5 -Confirmar` → borra de verdad
+- La URL fija `releases/latest/download/...` siempre apunta a la Release más nueva, así
+  que limpiar las viejas no rompe ninguna descarga.
+
 Detalles útiles:
 
 - Al ser un `.exe` sin firma digital, Windows puede mostrar *"Windows protegió tu
